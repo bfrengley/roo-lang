@@ -22,6 +22,8 @@ description:         Please see the README on GitHub at <https://github.com/bfre
 dependencies:
 - base >= 4.7 && < 5
 - parsec
+- hspec
+- paths
 
 library:
   source-dirs: src
@@ -48,3 +50,7 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - roo-lang
+    - hspec
+    - paths
+
+
