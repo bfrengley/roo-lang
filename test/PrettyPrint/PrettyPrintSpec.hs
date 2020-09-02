@@ -11,18 +11,21 @@ import Test.Hspec
 import AST
 import PrettyPrint
 
+getFixturePath :: String -> String
+getFixturePath fileName = toUnrootedFilePath ((takeDirectory (fragment __FILE__)) </> fragment fileName)
+
+getFixture :: String -> IO String
+getFixture fixtureName = readFile (getFixturePath fixtureName)
+
 spec :: Spec
 spec = do
   describe "prettyPrint" $ do
-    it "prints the right thing" $ do
-      putStr __FILE__
-      let testSource = toUnrootedFilePath ((takeDirectory (fragment __FILE__)) </> fragment "prettyPrintTest.roo")
-      putStr testSource
-      prettyPrintTestCode <- readFile testSource
-      prettyPrint complexAst `shouldBe` prettyPrintTestCode
+    it "pretty-prints simpleTest1" $ do
+      prettyPrintTestCode <- getFixture "simpleTest1.roo"
+      prettyPrint simpleText1Ast `shouldBe` prettyPrintTestCode
         where
             -- prettyPrintTestCode = "blah blah blah blah"
-            complexAst =
+            simpleText1Ast =
                 Program
                     []
                     []
