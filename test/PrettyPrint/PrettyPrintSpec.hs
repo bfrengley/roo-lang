@@ -35,7 +35,7 @@ spec = do
                                 ProcHead
                                     "main"
                                     [
-                                        ProcParam "arg1" (BoolParam PassByVal)
+                                        ProcParam (BoolParam PassByVal) "arg1"
                                     ]
                             )
                             (
