@@ -1,6 +1,8 @@
 module Parser where
 
 import AST
+import Control.Applicative (Applicative (liftA2))
+import Data.Functor (($>))
 import Text.Parsec
 import Text.Parsec.Expr
 import Text.Parsec.Language (emptyDef)
@@ -115,21 +117,24 @@ operatorTable =
       binaryRelOp ">" OpGreater,
       binaryRelOp ">=" OpGreaterEq
     ],
+    -- there's a bug here in that it doesn't support chained `not`, like `not not true`
+    [unaryTextOp "not" OpNot],
     [binaryRelTextOp "and" OpAnd],
     [binaryRelTextOp "or" OpOr]
   ]
   where
-    defBinaryOp fixity assoc parseOp name op =
-      fixity
+    defBinaryOp assoc parseOp name op =
+      Infix
         ( do
             parseOp name
             return $ BinOpExpr op
         )
         assoc
 
-    binaryOp = defBinaryOp Infix AssocLeft reservedOp
-    binaryRelOp = defBinaryOp Infix AssocNone reservedOp
-    binaryRelTextOp = defBinaryOp Infix AssocNone reserved
+    binaryOp = defBinaryOp AssocLeft reservedOp
+    binaryRelOp = defBinaryOp AssocNone reservedOp
+    binaryRelTextOp = defBinaryOp AssocNone reserved
+    unaryTextOp name op = Prefix (reservedOp name $> UnOpExpr op)
 
 --
 -- Expressions
@@ -140,7 +145,14 @@ parseExpr = buildExpressionParser operatorTable parseFac <?> "expression"
 
 parseFac :: Parser Expr
 parseFac =
-  choice [parens parseExpr, parseNum, parseBool, parseString, parseIdent]
+  choice
+    [ parseNegOpExpr,
+      parens parseExpr,
+      parseNum,
+      parseBool,
+      parseString,
+      parseIdent
+    ]
     <?> "simple expression"
 
 parseNum :: Parser Expr
@@ -161,19 +173,29 @@ parseBool =
     <?> "boolean"
 
 parseString :: Parser Expr
-parseString = fail "unimplemented" -- TODO
+parseString =
+  do
+    char '"'
+    str <- many $ satisfy (/= '"')
+    symbol "\""
+    return $ ConstStr str
+    <?> "string"
 
 parseIdent :: Parser Expr
-parseIdent = do LVal <$> parseLval <?> "identifier"
+parseIdent = LVal <$> parseLval <?> "identifier"
 
 parseLval :: Parser LValue
 parseLval =
   do
     ident <- identifier
-    index <- optionMaybe $ squares parseExpr -- this allows spaces - should it?
+    index <- optionMaybe $ squares parseExpr
     field <- optionMaybe $ dot *> identifier
     return $ LValue ident index field
     <?> "lvalue"
+
+parseNegOpExpr = symbol "-" $> UnOpExpr OpNeg <*> parseFac <?> ""
+
+parseNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> parseExpr <?> ""
 
 --
 -- Statements
@@ -253,15 +275,90 @@ parseRecordDef =
 
 parseField :: Parser FieldDecl
 parseField =
-  BoolField <$> (reserved "boolean" *> identifier)
-    <|> IntField <$> (reserved "integer" *> identifier)
+  reserved "boolean" $> BoolField <*> identifier
+    <|> reserved "integer" $> IntField <*> identifier
     <?> "field declaration"
 
 --
 -- Arrays
 --
 
+parseArrayDef :: Parser ArrayDef
+parseArrayDef =
+  do
+    reserved "array"
+    size <- fromInteger <$> squares natural
+    arrType <- parseArrayType
+    ident <- identifier
+    semi
+    return $ ArrayDef ident arrType size
+    <?> "array definition"
+
+parseArrayType :: Parser ArrayType
+parseArrayType =
+  reserved "boolean" $> BoolArr
+    <|> reserved "integer" $> IntArr
+    <|> AliasArr <$> identifier
+    <?> "array type"
+
 --
+-- Procedures
+--
+
+parseProc :: Parser Procedure
+parseProc =
+  reserved "procedure" *> liftA2 Procedure parseProcHead parseProcBody
+    <?> "procedure"
+
+parseProcHead :: Parser ProcHead
+parseProcHead =
+  liftA2 ProcHead identifier (parens $ sepBy parseProcParam (symbol ","))
+    <?> "procedure header"
+
+parseProcBody :: Parser ProcBody
+parseProcBody = liftA2 ProcBody (many parseVarDecl) (braces (many1 parseStmt)) <?> "procedure body"
+
+parseProcParam :: Parser ProcParam
+parseProcParam = liftA2 ProcParam identifier parseProcParamType <?> "parameter"
+
+parseProcParamType :: Parser ProcParamType
+parseProcParamType =
+  reserved "boolean" $> BoolParam <*> tryParsePassType
+    <|> reserved "integer" $> IntParam <*> tryParsePassType
+    <|> AliasParam <$> identifier
+    <?> "parameter type"
+  where
+    tryParsePassType = option PassByRef (reserved "val" $> PassByVal)
+
+parseVarDecl :: Parser VarDecl
+parseVarDecl =
+  do
+    varType <-
+      reserved "boolean" $> BoolVar
+        <|> reserved "integer" $> IntVar
+        <|> AliasVar <$> identifier
+        <?> "type"
+    idents <- sepBy1 identifier $ symbol ","
+    semi
+    return $ VarDecl varType idents
+    <?> "variable declaration"
+
+--
+-- Programs
+--
+
+parseRooProgram :: Parser Program
+parseRooProgram =
+  do
+    whiteSpace
+    records <- many parseRecordDef
+    whiteSpace
+    arrays <- many parseArrayDef
+    whiteSpace
+    procs <- many1 parseProc
+    whiteSpace
+    eof
+    return $ Program records arrays procs
 
 parse' :: Parser p -> String -> Either ParseError p
 parse' p = runParser p 0 ""
