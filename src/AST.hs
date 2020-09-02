@@ -81,7 +81,7 @@ data ProcParamType
   | AliasParam Ident
   deriving (Eq, Show)
 
-data ProcParam = ProcParam Ident ProcParamType
+data ProcParam = ProcParam ProcParamType Ident
   deriving (Eq, Show)
 
 data ProcHead = ProcHead Ident [ProcParam]

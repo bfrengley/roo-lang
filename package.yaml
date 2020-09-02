@@ -36,6 +36,7 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - roo-lang
+    - pretty-simple
 
 tests:
   roo-lang-test:

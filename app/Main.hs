@@ -4,6 +4,7 @@ import Parser
 import System.Environment
 import System.Exit
 import Text.Parsec
+import Text.Pretty.Simple (pPrint)
 
 main :: IO ()
 main =
@@ -14,7 +15,7 @@ main =
     input <- readFile (head args)
     let output = runParser parseRooProgram 0 "" input
     case output of
-      Right ast -> print ast
+      Right ast -> pPrint ast
       Left err -> do
         putStr "Parse error at "
         print err

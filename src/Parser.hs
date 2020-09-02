@@ -176,10 +176,23 @@ parseString :: Parser Expr
 parseString =
   do
     char '"'
-    str <- many $ satisfy (/= '"')
+    str <- many (normalChar <|> escapedChar <?> "")
     symbol "\""
-    return $ ConstStr str
+    return $ ConstStr (concat str)
     <?> "string"
+  where
+    -- match a backslash followed by: another backslash; a double quote, t, or n
+    escapedChar =
+      do
+        bs <- char '\\'
+        chr <- oneOf "\\\"tn"
+        return [bs, chr]
+
+    -- match any single char other than disallowed whitespace, double quotes, or backslashes
+    normalChar =
+      do
+        chr <- noneOf "\\\"\t\n"
+        return [chr]
 
 parseIdent :: Parser Expr
 parseIdent = LVal <$> parseLval <?> "identifier"
@@ -267,7 +280,7 @@ parseRecordDef :: Parser RecordDef
 parseRecordDef =
   do
     reserved "record"
-    fields <- sepBy1 parseField semi
+    fields <- braces $ sepBy1 parseField semi
     ident <- identifier
     semi
     return $ RecordDef ident fields
@@ -319,7 +332,7 @@ parseProcBody :: Parser ProcBody
 parseProcBody = liftA2 ProcBody (many parseVarDecl) (braces (many1 parseStmt)) <?> "procedure body"
 
 parseProcParam :: Parser ProcParam
-parseProcParam = liftA2 ProcParam identifier parseProcParamType <?> "parameter"
+parseProcParam = liftA2 ProcParam parseProcParamType identifier <?> "parameter"
 
 parseProcParamType :: Parser ProcParamType
 parseProcParamType =
