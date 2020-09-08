@@ -1,0 +1,5 @@
+procedure main ()
+{
+    a <- not 1 < 2;
+    b <- true = not false;
+}

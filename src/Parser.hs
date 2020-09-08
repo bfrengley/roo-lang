@@ -117,8 +117,7 @@ operatorTable =
       binaryRelOp ">" OpGreater,
       binaryRelOp ">=" OpGreaterEq
     ],
-    -- there's a bug here in that it doesn't support chained `not`, like `not not true`
-    [unaryTextOp "not" OpNot],
+    -- [chainableUnaryOp "not" OpNot],
     [binaryRelTextOp "and" OpAnd],
     [binaryRelTextOp "or" OpOr]
   ]
@@ -134,7 +133,11 @@ operatorTable =
     binaryOp = defBinaryOp AssocLeft reservedOp
     binaryRelOp = defBinaryOp AssocNone reservedOp
     binaryRelTextOp = defBinaryOp AssocNone reserved
-    unaryTextOp name op = Prefix (reservedOp name $> UnOpExpr op)
+    -- This is a little obscure
+    chainableUnaryOp name op =
+      let compose = pure (.)
+          parseUnaryOp = reserved name $> UnOpExpr op
+       in Prefix . chainl1 parseUnaryOp $ compose
 
 --
 -- Expressions
@@ -151,7 +154,8 @@ parseFac =
       parseNum,
       parseBool,
       parseString,
-      parseIdent
+      parseIdent,
+      parseNotOpExpr
     ]
     <?> "simple expression"
 
@@ -176,22 +180,22 @@ parseString :: Parser Expr
 parseString =
   do
     char '"'
-    str <- many (normalChar <|> escapedChar <?> "")
+    str <- many (normalChar <|> escapedChar)
     symbol "\""
     return $ ConstStr (concat str)
     <?> "string"
   where
-    -- match a backslash followed by: another backslash; a double quote, t, or n
+    -- match a backslash followed by: another backslash, a double quote, t, or n
     escapedChar =
       do
         bs <- char '\\'
-        chr <- oneOf "\\\"tn"
+        chr <- oneOf ['\\', '"', 't', 'n']
         return [bs, chr]
 
     -- match any single char other than disallowed whitespace, double quotes, or backslashes
     normalChar =
       do
-        chr <- noneOf "\\\"\t\n"
+        chr <- noneOf ['\\', '"', '\t', '\n']
         return [chr]
 
 parseIdent :: Parser Expr
@@ -206,9 +210,11 @@ parseLval =
     return $ LValue ident index field
     <?> "lvalue"
 
+parseNegOpExpr :: Parser Expr
 parseNegOpExpr = symbol "-" $> UnOpExpr OpNeg <*> parseFac <?> ""
 
-parseNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> parseExpr <?> ""
+parseNotOpExpr :: Parser Expr
+parseNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> parseFac <?> ""
 
 --
 -- Statements
@@ -374,4 +380,4 @@ parseRooProgram =
     return $ Program records arrays procs
 
 parse' :: Parser p -> String -> Either ParseError p
-parse' p = runParser p 0 ""
+parse' p = runParser (whiteSpace *> p <* whiteSpace <* eof) 0 ""

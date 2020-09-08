@@ -24,6 +24,7 @@ dependencies:
 - parsec
 - hspec
 - paths
+- mtl
 
 library:
   source-dirs: src
@@ -52,5 +53,3 @@ tests:
     - roo-lang
     - hspec
     - paths
-
-

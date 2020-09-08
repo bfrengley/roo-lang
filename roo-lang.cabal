@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a87dc0477e8ca87455cd384415eb898b5e363e54d29d5be89619208c20d0abd1
+-- hash: 2c69d1240604d990907867538768de4fd090339e2d5a07d8a291f18bdffdef3c
 
 name:           roo-lang
 version:        0.1.0.0
@@ -37,6 +37,7 @@ library
   build-depends:
       base >=4.7 && <5
     , hspec
+    , mtl
     , parsec
     , paths
   default-language: Haskell2010
@@ -51,6 +52,7 @@ executable roo-lang-exe
   build-depends:
       base >=4.7 && <5
     , hspec
+    , mtl
     , parsec
     , paths
     , pretty-simple
@@ -69,6 +71,7 @@ test-suite roo-lang-test
   build-depends:
       base >=4.7 && <5
     , hspec
+    , mtl
     , parsec
     , paths
     , roo-lang
