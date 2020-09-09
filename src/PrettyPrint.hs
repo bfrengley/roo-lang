@@ -37,13 +37,13 @@ prettyPrint (Program recordDefs arrayDefs mainProc) =
 --
 -- Expression pretty printer
 --
--- It has issues with
---
 
-initialPrecedence :: Int
-initialPrecedence = 0
+type Precedence = Int
 
-binOpPrecedence :: BinaryOp -> Int
+basePrecedence :: Precedence
+basePrecedence = 0
+
+binOpPrecedence :: BinaryOp -> Precedence
 binOpPrecedence OpOr = 1
 binOpPrecedence OpAnd = 2
 binOpPrecedence OpEq = 4
@@ -60,13 +60,13 @@ binOpPrecedence OpDiv = 6
 -- the operators * and / have the same precedence, but / isn't associative
 -- these special sentinel values allow us to detect when a mul/div expression occurs on the RHS of
 -- a * or / so that we can keep the parentheses in place
-rhsMulPrecedence :: Int
+rhsMulPrecedence :: Precedence
 rhsMulPrecedence = 7
 
-rhsDivPrecedence :: Int
+rhsDivPrecedence :: Precedence
 rhsDivPrecedence = 8
 
-unOpPrecedence :: UnaryOp -> Int
+unOpPrecedence :: UnaryOp -> Precedence
 unOpPrecedence OpNot = 3
 -- this is higher than expected to allow us to do special handling of mul/div associativity
 unOpPrecedence OpNeg = 9
@@ -96,9 +96,9 @@ pPrintUnOp OpNot = "not "
 pPrintUnOp OpNeg = "-"
 
 pPrintExpr :: Expr -> String
-pPrintExpr = pPrintExpr' initialPrecedence
+pPrintExpr = pPrintExpr' basePrecedence
 
-pPrintExpr' :: Int -> Expr -> String
+pPrintExpr' :: Precedence -> Expr -> String
 pPrintExpr' _ (LVal lv) = pPrintLval lv
 pPrintExpr' _ (ConstBool b) = show b
 pPrintExpr' _ (ConstInt n) = show n
@@ -106,7 +106,7 @@ pPrintExpr' _ (ConstStr s) = show s
 pPrintExpr' prec (UnOpExpr op expr) =
   let exprStr = pPrintExpr' (unOpPrecedence op) expr
    in pPrintUnOp op ++ exprStr
-pPrintExpr' prec (BinOpExpr op lexpr rexpr) =
+pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
   let wrap parentPrec exprPrec expr
         -- 1*(2*3) is the special case of our special case: * is associative, so we can ignore
         -- the fact that it produces a different parse tree and just remove the parentheses
@@ -117,11 +117,13 @@ pPrintExpr' prec (BinOpExpr op lexpr rexpr) =
         | otherwise = expr
 
       opPrec = binOpPrecedence op
-      left = pPrintExpr' opPrec lexpr
+      left = pPrintExpr' opPrec lhsExpr
       right = case op of
         -- if the RHS of a mul/div expression is a div expression, it was parenthesised
         -- we pretend the operator has a higher precedence to get the right parentheses
-        OpDiv -> pPrintExpr' rhsDivPrecedence rexpr
-        OpMul -> pPrintExpr' rhsMulPrecedence rexpr
-        _ -> pPrintExpr' opPrec rexpr
+        -- if the RHS isn't a div expression, the special precedences are positioned the same
+        -- relative to all other operators, so it doesn't matter
+        OpDiv -> pPrintExpr' rhsDivPrecedence rhsExpr
+        OpMul -> pPrintExpr' rhsMulPrecedence rhsExpr
+        _ -> pPrintExpr' opPrec rhsExpr
    in wrap prec opPrec $ left ++ pPrintBinOp op ++ right

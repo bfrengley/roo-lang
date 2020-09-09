@@ -1,9 +1,9 @@
 module AST where
 
-type Ident = String -- should this be newtype?
+type Ident = String
 
 data UnaryOp
-  = OpNeg -- unary minus
+  = OpNeg
   | OpNot
   deriving (Eq, Show)
 
@@ -31,16 +31,8 @@ data Expr
   | UnOpExpr UnaryOp Expr
   deriving (Eq, Show)
 
--- this technically covers all four cases
-data LValue
-  = LValue Ident (Maybe Expr) (Maybe Ident)
-  deriving (Eq, Show)
-
--- this one is more explicit, but encodes the same thing
-data LValueExplicit
-  = LVar Ident
-  | LIndex Ident Expr
-  | LField LValueExplicit Ident
+-- An l-value consists of an identifier, an option index expression, and an optional field
+data LValue = LValue Ident (Maybe Expr) (Maybe Ident)
   deriving (Eq, Show)
 
 data Stmt
@@ -53,18 +45,17 @@ data Stmt
   | WhileBlock Expr [Stmt]
   deriving (Eq, Show)
 
-data FieldDecl
-  = BoolField Ident
-  | IntField Ident
+data BuiltinType = TBool | TInt deriving (Eq, Show)
+
+data FieldDecl = FieldDecl BuiltinType Ident
   deriving (Eq, Show)
 
 data RecordDef = RecordDef Ident [FieldDecl]
   deriving (Eq, Show)
 
 data ArrayType
-  = BoolArr
-  | IntArr
-  | AliasArr Ident
+  = ArrBuiltinT BuiltinType
+  | ArrAliasT Ident
   deriving (Eq, Show)
 
 data ArrayDef = ArrayDef Ident ArrayType Int
@@ -76,9 +67,8 @@ data ProcParamPassType -- better name?
   deriving (Eq, Show)
 
 data ProcParamType
-  = BoolParam ProcParamPassType
-  | IntParam ProcParamPassType
-  | AliasParam Ident
+  = ParamBuiltinT BuiltinType ProcParamPassType
+  | ParamAliasT Ident
   deriving (Eq, Show)
 
 data ProcParam = ProcParam ProcParamType Ident
@@ -88,7 +78,7 @@ data ProcHead = ProcHead Ident [ProcParam]
   deriving (Eq, Show)
 
 -- this is the same type as ArrayType
-data VarType = BoolVar | IntVar | AliasVar Ident
+data VarType = VarBuiltinT BuiltinType | VarAliasT Ident
   deriving (Eq, Show)
 
 data VarDecl = VarDecl VarType [Ident]

@@ -139,6 +139,11 @@ operatorTable =
           parseUnaryOp = reserved name $> UnOpExpr op
        in Prefix . chainl1 parseUnaryOp $ compose
 
+parseBuiltinType :: Parser BuiltinType
+parseBuiltinType =
+  (reserved "boolean" $> TBool <?> "boolean")
+    <|> (reserved "integer" $> TInt <?> "integer")
+
 --
 -- Expressions
 --
@@ -294,8 +299,7 @@ parseRecordDef =
 
 parseField :: Parser FieldDecl
 parseField =
-  reserved "boolean" $> BoolField <*> identifier
-    <|> reserved "integer" $> IntField <*> identifier
+  FieldDecl <$> parseBuiltinType <*> identifier
     <?> "field declaration"
 
 --
@@ -315,9 +319,8 @@ parseArrayDef =
 
 parseArrayType :: Parser ArrayType
 parseArrayType =
-  reserved "boolean" $> BoolArr
-    <|> reserved "integer" $> IntArr
-    <|> AliasArr <$> identifier
+  ArrBuiltinT <$> parseBuiltinType
+    <|> ArrAliasT <$> identifier
     <?> "array type"
 
 --
@@ -342,9 +345,8 @@ parseProcParam = liftA2 ProcParam parseProcParamType identifier <?> "parameter"
 
 parseProcParamType :: Parser ProcParamType
 parseProcParamType =
-  reserved "boolean" $> BoolParam <*> tryParsePassType
-    <|> reserved "integer" $> IntParam <*> tryParsePassType
-    <|> AliasParam <$> identifier
+  ParamBuiltinT <$> parseBuiltinType <*> tryParsePassType
+    <|> ParamAliasT <$> identifier
     <?> "parameter type"
   where
     tryParsePassType = option PassByRef (reserved "val" $> PassByVal)
@@ -353,9 +355,8 @@ parseVarDecl :: Parser VarDecl
 parseVarDecl =
   do
     varType <-
-      reserved "boolean" $> BoolVar
-        <|> reserved "integer" $> IntVar
-        <|> AliasVar <$> identifier
+      VarBuiltinT <$> parseBuiltinType
+        <|> VarAliasT <$> identifier
         <?> "type"
     idents <- sepBy1 identifier $ symbol ","
     semi
