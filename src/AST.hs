@@ -35,13 +35,19 @@ data Expr
 data LValue = LValue Ident (Maybe Expr) (Maybe Ident)
   deriving (Eq, Show)
 
-data Stmt
+data Stmt = SAtom AtomicStmt | SComp CompositeStmt
+  deriving (Eq, Show)
+
+data AtomicStmt
   = Assign LValue Expr
   | Read LValue
   | Write Expr
   | WriteLn Expr
   | Call Ident [Expr]
-  | IfBlock Expr [Stmt] [Stmt]
+  deriving (Eq, Show)
+
+data CompositeStmt
+  = IfBlock Expr [Stmt] [Stmt]
   | WhileBlock Expr [Stmt]
   deriving (Eq, Show)
 

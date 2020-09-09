@@ -1,7 +1,8 @@
 module PrettyPrint where
 
 import AST
-import Control.Monad.State.Lazy
+import Control.Monad.State
+import Data.List (intercalate)
 import Data.Maybe (maybe)
 
 -- prettyPrint :: Program -> String
@@ -39,6 +40,8 @@ prettyPrint (Program recordDefs arrayDefs mainProc) =
 --
 
 type Precedence = Int
+
+type IndentationState = State Int String
 
 basePrecedence :: Precedence
 basePrecedence = 0
@@ -127,3 +130,50 @@ pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
         OpMul -> pPrintExpr' rhsMulPrecedence rhsExpr
         _ -> pPrintExpr' opPrec rhsExpr
    in wrap prec opPrec $ left ++ pPrintBinOp op ++ right
+
+--
+-- Statements
+--
+
+pPrintStmt :: Stmt -> IndentationState
+pPrintStmt (SAtom atom) = do
+  depth <- get
+  return $ indent depth $ pPrintAtomicStmt atom ++ ";"
+pPrintStmt (SComp comp) = pPrintCompositeStmt comp
+
+pPrintAtomicStmt :: AtomicStmt -> String
+pPrintAtomicStmt (Assign lval expr) = pPrintLval lval ++ " <- " ++ pPrintExpr expr
+pPrintAtomicStmt (Read lval) = "read " ++ pPrintLval lval
+pPrintAtomicStmt (Write expr) = "write " ++ pPrintExpr expr
+pPrintAtomicStmt (WriteLn expr) = "writeln " ++ pPrintExpr expr
+pPrintAtomicStmt (Call ident exprs) =
+  let exprList = intercalate ", " $ map pPrintExpr exprs
+   in "call " ++ ident ++ "(" ++ exprList ++ ")"
+
+pPrintCompositeStmt :: CompositeStmt -> IndentationState
+pPrintCompositeStmt (IfBlock expr mainStmts elseStmts) = do
+  depth <- get
+  put 1
+  prettyMain <- mapM pPrintStmt mainStmts
+  prettyElse <- mapM pPrintStmt elseStmts
+  put depth
+  let elseBlock =
+        ( case prettyElse of
+            [] -> []
+            es -> "else" : es
+        )
+  return $
+    unlines $
+      map (indent depth) $
+        concat
+          [ ["if " ++ pPrintExpr expr ++ " then"],
+            prettyMain,
+            elseBlock,
+            ["fi"]
+          ]
+
+-- pPrintCompositeStmt (WhileBlock expr body) = do
+--     indent <- get
+
+indent :: Int -> String -> String
+indent n s = replicate (4 * n) ' ' ++ s

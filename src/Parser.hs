@@ -227,30 +227,37 @@ parseNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> parseFac <?> ""
 
 parseStmt :: Parser Stmt
 parseStmt =
-  choice [parseAssign, parseRead, parseWrite, parseWriteLn, parseCall, parseIf, parseWhile]
+  parseCompositeStmt <|> parseAtomicStmt
     <?> "statement"
 
-parseAssign :: Parser Stmt
+parseCompositeStmt :: Parser Stmt
+parseCompositeStmt = SComp <$> choice [parseIf, parseWhile] <?> ""
+
+parseAtomicStmt :: Parser Stmt
+parseAtomicStmt =
+  SAtom <$> choice [parseAssign, parseRead, parseWrite, parseWriteLn, parseCall] <?> ""
+
+parseAssign :: Parser AtomicStmt
 parseAssign =
   Assign <$> (parseLval <* reservedOp "<-") <*> (parseExpr <* semi)
     <?> "assignment"
 
-parseRead :: Parser Stmt
+parseRead :: Parser AtomicStmt
 parseRead =
   Read <$> (reserved "read" *> parseLval <* semi)
     <?> "read"
 
-parseWrite :: Parser Stmt
+parseWrite :: Parser AtomicStmt
 parseWrite =
   Write <$> (reserved "write" *> parseExpr <* semi)
     <?> "write"
 
-parseWriteLn :: Parser Stmt
+parseWriteLn :: Parser AtomicStmt
 parseWriteLn =
   WriteLn <$> (reserved "writeln" *> parseExpr <* semi)
     <?> "writeln"
 
-parseCall :: Parser Stmt
+parseCall :: Parser AtomicStmt
 parseCall =
   do
     reserved "call"
@@ -260,7 +267,7 @@ parseCall =
     return $ Call ident exprs
     <?> "call"
 
-parseIf :: Parser Stmt
+parseIf :: Parser CompositeStmt
 parseIf =
   do
     reserved "if"
@@ -272,7 +279,7 @@ parseIf =
     return $ IfBlock expr mainBody elseBody
     <?> "if block"
 
-parseWhile :: Parser Stmt
+parseWhile :: Parser CompositeStmt
 parseWhile =
   do
     reserved "while"
