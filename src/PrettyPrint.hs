@@ -46,32 +46,48 @@ basePrecedence :: Precedence
 basePrecedence = 0
 
 binOpPrecedence :: BinaryOp -> Precedence
-binOpPrecedence OpOr = 1
-binOpPrecedence OpAnd = 2
-binOpPrecedence OpEq = 4
-binOpPrecedence OpNeq = 4
-binOpPrecedence OpLess = 4
-binOpPrecedence OpLessEq = 4
-binOpPrecedence OpGreater = 4
-binOpPrecedence OpGreaterEq = 4
-binOpPrecedence OpPlus = 5
-binOpPrecedence OpMinus = 5
-binOpPrecedence OpMul = 6
-binOpPrecedence OpDiv = 6
+binOpPrecedence OpOr = 3
+binOpPrecedence OpAnd = 6
+binOpPrecedence OpEq = 12
+binOpPrecedence OpNeq = 12
+binOpPrecedence OpLess = 12
+binOpPrecedence OpLessEq = 12
+binOpPrecedence OpGreater = 12
+binOpPrecedence OpGreaterEq = 12
+binOpPrecedence OpPlus = 15
+binOpPrecedence OpMinus = 15
+binOpPrecedence OpMul = 18
+binOpPrecedence OpDiv = 18
+
+isNonAssoc :: Precedence -> Bool
+isNonAssoc prec = prec == 12 || prec == 6 || prec == 3
+
+-- Harald why
+-- Non-associative operators can only be chained if parentheses are present, as opposed to
+-- associative operators. In order to force parentheses to be retained, we adjust their precedence
+-- one partial increment upwards to make them higher precedence than their equal precedence
+-- children in an expression tree.
+adjustPrecedence :: Precedence -> Precedence
+adjustPrecedence prec
+  | isNonAssoc prec = prec + 1
+  | otherwise = prec
 
 -- the operators * and / have the same precedence, but / isn't associative
 -- these special sentinel values allow us to detect when a mul/div expression occurs on the RHS of
 -- a * or / so that we can keep the parentheses in place
 rhsMulPrecedence :: Precedence
-rhsMulPrecedence = 7
+rhsMulPrecedence = 19
 
 rhsDivPrecedence :: Precedence
-rhsDivPrecedence = 8
+rhsDivPrecedence = 20
+
+rhsMinusPrecedence :: Precedence
+rhsMinusPrecedence = 16
 
 unOpPrecedence :: UnaryOp -> Precedence
-unOpPrecedence OpNot = 3
+unOpPrecedence OpNot = 9
 -- this is higher than expected to allow us to do special handling of mul/div associativity
-unOpPrecedence OpNeg = 9
+unOpPrecedence OpNeg = 21
 
 pPrintLval :: LValue -> T.Text
 pPrintLval (LValue ident idx field) =
@@ -120,7 +136,8 @@ pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
         | otherwise = expr
 
       opPrec = binOpPrecedence op
-      left = pPrintExpr' opPrec lhsExpr
+
+      left = pPrintExpr' (adjustPrecedence opPrec) lhsExpr
       right = case op of
         -- if the RHS of a mul/div expression is a div expression, it was parenthesised
         -- we pretend the operator has a higher precedence to get the right parentheses
@@ -128,7 +145,8 @@ pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
         -- relative to all other operators, so it doesn't matter
         OpDiv -> pPrintExpr' rhsDivPrecedence rhsExpr
         OpMul -> pPrintExpr' rhsMulPrecedence rhsExpr
-        _ -> pPrintExpr' opPrec rhsExpr
+        OpMinus -> pPrintExpr' rhsMinusPrecedence rhsExpr
+        _ -> pPrintExpr' (adjustPrecedence opPrec) rhsExpr
    in wrap prec opPrec $ left <> pPrintBinOp op <> right
 
 --
@@ -155,7 +173,12 @@ pPrintCompositeStmt (IfBlock expr mainStmts elseStmts) =
       elseBlock = case prettyElse of
         [] -> []
         es -> "else" : es
-   in concat [["if " <> pPrintExpr expr <> " then"], prettyMain, elseBlock, ["fi"]]
+   in concat
+        [ ["if " <> pPrintExpr expr <> " then"],
+          prettyMain,
+          elseBlock,
+          ["fi"]
+        ]
 pPrintCompositeStmt (WhileBlock expr body) =
   let prettyBody = map indent $ concatMap pPrintStmt body
    in concat
@@ -213,7 +236,12 @@ pPrintParamType (ParamAliasT t) = pPrintIdent t
 
 pPrintProcBody :: ProcBody -> [T.Text]
 pPrintProcBody (ProcBody vars body) =
-  concat [indentMap pPrintVarDecl vars, ["{"], indentMany pPrintStmt body, ["}"]]
+  concat
+    [ indentMap pPrintVarDecl vars,
+      ["{"],
+      indentMany pPrintStmt body,
+      ["}", ""]
+    ]
 
 pPrintVarDecl :: VarDecl -> T.Text
 pPrintVarDecl (VarDecl t names) =
