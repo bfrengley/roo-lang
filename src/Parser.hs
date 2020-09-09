@@ -374,8 +374,8 @@ parseVarDecl =
 -- Programs
 --
 
-parseRooProgram :: Parser Program
-parseRooProgram =
+parseProgram :: Parser Program
+parseProgram =
   do
     whiteSpace
     records <- many parseRecordDef
@@ -386,6 +386,9 @@ parseRooProgram =
     whiteSpace
     eof
     return $ Program records arrays procs
+
+parseRooProgram :: String -> Either ParseError Program
+parseRooProgram = parse' parseProgram
 
 parse' :: Parser p -> String -> Either ParseError p
 parse' p = runParser (whiteSpace *> p <* whiteSpace <* eof) 0 ""

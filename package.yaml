@@ -24,14 +24,14 @@ dependencies:
 - parsec
 - hspec
 - paths
-- mtl
+- text
 
 library:
   source-dirs: src
 
 executables:
-  roo-lang-exe:
-    main:                Main.hs
+  Roo:
+    main:                Roo.hs
     source-dirs:         app
     ghc-options:
     - -threaded
