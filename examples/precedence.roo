@@ -68,4 +68,5 @@ procedure main ()
 {
     a <- not 1 < 2;
     b <- true = not false;
+    bool <- true and (5 or 3 = 2 and (not (-never)));
 }

@@ -25,7 +25,7 @@ data BinaryOp
 data Expr
   = LVal LValue
   | ConstBool Bool
-  | ConstInt Int
+  | ConstInt Integer
   | ConstStr String
   | BinOpExpr BinaryOp Expr Expr
   | UnOpExpr UnaryOp Expr
@@ -64,7 +64,7 @@ data ArrayType
   | ArrAliasT Ident
   deriving (Eq, Show)
 
-data ArrayDef = ArrayDef Ident ArrayType Int
+data ArrayDef = ArrayDef Ident ArrayType Integer
   deriving (Eq, Show)
 
 data ProcParamPassType -- better name?

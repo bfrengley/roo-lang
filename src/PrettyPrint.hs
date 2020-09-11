@@ -125,8 +125,8 @@ pPrintExpr' prec (UnOpExpr op expr) =
   let exprStr = pPrintExpr' (unOpPrecedence op) expr
    in pPrintUnOp op <> exprStr
 pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
-  let wrap :: Precedence -> Precedence -> T.Text -> T.Text
-      wrap parentPrec exprPrec expr
+  let parenthesise :: Precedence -> Precedence -> T.Text -> T.Text
+      parenthesise parentPrec exprPrec expr
         -- 1*(2*3) is the special case of our special case: * is associative, so we can ignore
         -- the fact that it produces a different parse tree and just remove the parentheses
         | parentPrec == rhsMulPrecedence && op == OpMul = expr
@@ -136,8 +136,9 @@ pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
         | otherwise = expr
 
       opPrec = binOpPrecedence op
+      pPrintChild = pPrintExpr' (adjustPrecedence opPrec)
 
-      left = pPrintExpr' (adjustPrecedence opPrec) lhsExpr
+      left = pPrintChild lhsExpr
       right = case op of
         -- if the RHS of a mul/div expression is a div expression, it was parenthesised
         -- we pretend the operator has a higher precedence to get the right parentheses
@@ -145,9 +146,10 @@ pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
         -- relative to all other operators, so it doesn't matter
         OpDiv -> pPrintExpr' rhsDivPrecedence rhsExpr
         OpMul -> pPrintExpr' rhsMulPrecedence rhsExpr
+        -- minus is similar: 1 - 1 + 1 != 1 - (1 + 1)
         OpMinus -> pPrintExpr' rhsMinusPrecedence rhsExpr
-        _ -> pPrintExpr' (adjustPrecedence opPrec) rhsExpr
-   in wrap prec opPrec $ left <> pPrintBinOp op <> right
+        _ -> pPrintChild rhsExpr
+   in parenthesise prec opPrec $ left <> pPrintBinOp op <> right
 
 --
 -- Statements
@@ -224,10 +226,9 @@ pPrintProcedure (Procedure head body) = pPrintProcHead head : pPrintProcBody bod
 
 pPrintProcHead :: ProcHead -> T.Text
 pPrintProcHead (ProcHead name params) =
-  T.unwords ["procedure", pPrintIdent name, "(" <> paramList <> ")"]
-  where
-    pPrintParam (ProcParam t ident) = T.unwords [pPrintParamType t, pPrintIdent ident]
-    paramList = T.intercalate ", " (map pPrintParam params)
+  let pPrintParam (ProcParam t ident) = T.unwords [pPrintParamType t, pPrintIdent ident]
+      paramList = T.intercalate ", " (map pPrintParam params)
+   in T.unwords ["procedure", pPrintIdent name, "(" <> paramList <> ")"]
 
 pPrintParamType :: ProcParamType -> T.Text
 pPrintParamType (ParamBuiltinT t PassByRef) = pPrintBuiltinType t

@@ -211,8 +211,8 @@ pLval :: Parser LValue
 pLval =
   do
     ident <- identifier
-    index <- optionMaybe $ squares pExpr
-    field <- optionMaybe $ dot *> identifier
+    index <- optionMaybe (squares pExpr) <?> "index expression"
+    field <- optionMaybe (dot *> identifier) <?> "field"
     return $ LValue ident index field
     <?> "lvalue"
 
@@ -309,12 +309,15 @@ pArrayDef :: Parser ArrayDef
 pArrayDef =
   do
     reserved "array"
-    size <- fromInteger <$> squares natural
+    size <- squares pPosNum
     arrType <- pArrayType
     ident <- identifier
     semi
     return $ ArrayDef ident arrType size
     <?> "array definition"
+
+pPosNum :: Parser Integer
+pPosNum = read <$> liftA2 (:) (oneOf "123456789" <?> "") (many digit <?> "") <?> "positive number"
 
 pArrayType :: Parser ArrayType
 pArrayType =
@@ -333,7 +336,7 @@ pProc =
 
 pProcHead :: Parser ProcHead
 pProcHead =
-  liftA2 ProcHead identifier (parens $ sepBy pProcParam (symbol ","))
+  liftA2 ProcHead identifier (parens $ pProcParam `sepBy` symbol ",")
     <?> "procedure header"
 
 pProcBody :: Parser ProcBody
