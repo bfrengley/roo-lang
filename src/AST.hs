@@ -56,7 +56,7 @@ data BuiltinType = TBool | TInt deriving (Eq, Show)
 data FieldDecl = FieldDecl BuiltinType Ident
   deriving (Eq, Show)
 
-data RecordDef = RecordDef Ident [FieldDecl]
+data RecordDef = RecordDef [FieldDecl] Ident
   deriving (Eq, Show)
 
 data ArrayType

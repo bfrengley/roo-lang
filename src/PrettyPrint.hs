@@ -192,7 +192,7 @@ pPrintCompositeStmt (WhileBlock expr body) =
 --
 
 pPrintRecord :: RecordDef -> [T.Text]
-pPrintRecord (RecordDef name (field : fields)) =
+pPrintRecord (RecordDef (field : fields) name) =
   let pPrintField open (FieldDecl t ident) = T.unwords [open, pPrintBuiltinType t, pPrintIdent ident]
       prettyOpen = indent $ pPrintField "{" field
       prettyFields = indentMap (pPrintField ";") fields

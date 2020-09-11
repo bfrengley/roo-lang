@@ -62,6 +62,9 @@ reserved = Q.reserved rooScanner
 reservedOp :: String -> Parser ()
 reservedOp = Q.reservedOp rooScanner
 
+inSpaces :: (String -> Parser ()) -> String -> Parser ()
+inSpaces parser input = space *> parser input <* space
+
 reservedWords :: [String]
 reservedWords =
   [ "and",
@@ -100,7 +103,10 @@ operatorNames =
     "-",
     "*",
     "/",
-    "<-"
+    "<-",
+    "and",
+    "or",
+    "not"
   ]
 
 --
@@ -117,30 +123,30 @@ operatorTable =
       binaryRelOp ">" OpGreater,
       binaryRelOp ">=" OpGreaterEq
     ],
-    -- [chainableUnaryOp "not" OpNot],
+    [chainableUnaryOp "not" OpNot],
     [binaryRelTextOp "and" OpAnd],
     [binaryRelTextOp "or" OpOr]
   ]
   where
-    defBinaryOp assoc parseOp name op =
+    defBinaryOp assoc pOp name op =
       Infix
         ( do
-            parseOp name
+            pOp name
             return $ BinOpExpr op
         )
         assoc
 
     binaryOp = defBinaryOp AssocLeft reservedOp
     binaryRelOp = defBinaryOp AssocNone reservedOp
-    binaryRelTextOp = defBinaryOp AssocNone reserved
+    binaryRelTextOp = defBinaryOp AssocNone symbol
     -- This is a little obscure
     chainableUnaryOp name op =
       let compose = pure (.)
-          parseUnaryOp = reserved name $> UnOpExpr op
-       in Prefix . chainl1 parseUnaryOp $ compose
+          pUnaryOp = reservedOp name $> UnOpExpr op
+       in Prefix $ chainl1 pUnaryOp compose
 
-parseBuiltinType :: Parser BuiltinType
-parseBuiltinType =
+pBuiltinType :: Parser BuiltinType
+pBuiltinType =
   (reserved "boolean" $> TBool <?> "boolean")
     <|> (reserved "integer" $> TInt <?> "integer")
 
@@ -148,41 +154,37 @@ parseBuiltinType =
 -- Expressions
 --
 
-parseExpr :: Parser Expr
-parseExpr = buildExpressionParser operatorTable parseFac <?> "expression"
+pExpr :: Parser Expr
+pExpr = buildExpressionParser operatorTable pFac <?> "expression"
 
-parseFac :: Parser Expr
-parseFac =
+pFac :: Parser Expr
+pFac =
   choice
-    [ parseNegOpExpr,
-      parens parseExpr,
-      parseNum,
-      parseBool,
-      parseString,
-      parseIdent,
-      parseNotOpExpr
+    [ pNegOpExpr,
+      pNotOpExpr,
+      parens pExpr,
+      pNum,
+      pBool,
+      pString,
+      pIdent
     ]
     <?> "simple expression"
 
-parseNum :: Parser Expr
-parseNum =
+pNum :: Parser Expr
+pNum =
   do
     n <- natural <?> ""
     return $ ConstInt (fromInteger n)
     <?> "number"
 
-parseBool :: Parser Expr
-parseBool =
-  do
-    reserved "true"
-    return $ ConstBool True
-    <|> do
-      reserved "false"
-      return $ ConstBool False
+pBool :: Parser Expr
+pBool =
+  reserved "true" $> ConstBool True
+    <|> reserved "false" $> ConstBool False
     <?> "boolean"
 
-parseString :: Parser Expr
-parseString =
+pString :: Parser Expr
+pString =
   do
     char '"'
     str <- many (normalChar <|> escapedChar)
@@ -198,94 +200,88 @@ parseString =
         return [bs, chr]
 
     -- match any single char other than disallowed whitespace, double quotes, or backslashes
-    normalChar =
-      do
-        chr <- noneOf ['\\', '"', '\t', '\n']
-        return [chr]
+    normalChar = do
+      c <- noneOf ['\\', '"', '\t', '\n']
+      return [c]
 
-parseIdent :: Parser Expr
-parseIdent = LVal <$> parseLval <?> "identifier"
+pIdent :: Parser Expr
+pIdent = LVal <$> pLval <?> "identifier"
 
-parseLval :: Parser LValue
-parseLval =
+pLval :: Parser LValue
+pLval =
   do
     ident <- identifier
-    index <- optionMaybe $ squares parseExpr
+    index <- optionMaybe $ squares pExpr
     field <- optionMaybe $ dot *> identifier
     return $ LValue ident index field
     <?> "lvalue"
 
-parseNegOpExpr :: Parser Expr
-parseNegOpExpr = symbol "-" $> UnOpExpr OpNeg <*> parseFac <?> ""
+pNegOpExpr :: Parser Expr
+pNegOpExpr = symbol "-" $> UnOpExpr OpNeg <*> pFac <?> ""
 
-parseNotOpExpr :: Parser Expr
-parseNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> parseFac <?> ""
+pNotOpExpr :: Parser Expr
+pNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> pFac <?> ""
 
 --
 -- Statements
 --
 
-parseStmt :: Parser Stmt
-parseStmt =
-  parseCompositeStmt <|> parseAtomicStmt
+pStmt :: Parser Stmt
+pStmt =
+  pCompositeStmt <|> pAtomicStmt
     <?> "statement"
 
-parseCompositeStmt :: Parser Stmt
-parseCompositeStmt = SComp <$> choice [parseIf, parseWhile] <?> ""
+pCompositeStmt :: Parser Stmt
+pCompositeStmt = SComp <$> choice [pIf, pWhile] <?> ""
 
-parseAtomicStmt :: Parser Stmt
-parseAtomicStmt =
-  SAtom <$> choice [parseAssign, parseRead, parseWrite, parseWriteLn, parseCall] <?> ""
+pAtomicStmt :: Parser Stmt
+pAtomicStmt =
+  SAtom <$> choice [pAssign, pRead, pWrite, pWriteLn, pCall] <* semi <?> ""
 
-parseAssign :: Parser AtomicStmt
-parseAssign =
-  Assign <$> (parseLval <* reservedOp "<-") <*> (parseExpr <* semi)
+pAssign :: Parser AtomicStmt
+pAssign =
+  Assign <$> (pLval <* reservedOp "<-") <*> pExpr
     <?> "assignment"
 
-parseRead :: Parser AtomicStmt
-parseRead =
-  Read <$> (reserved "read" *> parseLval <* semi)
+pRead :: Parser AtomicStmt
+pRead =
+  Read <$> (reserved "read" *> pLval)
     <?> "read"
 
-parseWrite :: Parser AtomicStmt
-parseWrite =
-  Write <$> (reserved "write" *> parseExpr <* semi)
+pWrite :: Parser AtomicStmt
+pWrite =
+  Write <$> (reserved "write" *> pExpr)
     <?> "write"
 
-parseWriteLn :: Parser AtomicStmt
-parseWriteLn =
-  WriteLn <$> (reserved "writeln" *> parseExpr <* semi)
+pWriteLn :: Parser AtomicStmt
+pWriteLn =
+  WriteLn <$> (reserved "writeln" *> pExpr)
     <?> "writeln"
 
-parseCall :: Parser AtomicStmt
-parseCall =
-  do
-    reserved "call"
-    ident <- identifier
-    exprs <- parens $ sepBy parseExpr (symbol ",")
-    semi
-    return $ Call ident exprs
-    <?> "call"
+pCall :: Parser AtomicStmt
+pCall = reserved "call" *> liftA2 Call identifier pArgs <?> "call"
+  where
+    pArgs = parens $ sepBy pExpr (symbol ",")
 
-parseIf :: Parser CompositeStmt
-parseIf =
+pIf :: Parser CompositeStmt
+pIf =
   do
     reserved "if"
-    expr <- parseExpr
+    expr <- pExpr
     reserved "then"
-    mainBody <- many1 parseStmt
-    elseBody <- option [] $ reserved "else" *> many1 parseStmt
+    mainBody <- many1 pStmt
+    elseBody <- option [] $ reserved "else" *> many1 pStmt
     reserved "fi"
     return $ IfBlock expr mainBody elseBody
     <?> "if block"
 
-parseWhile :: Parser CompositeStmt
-parseWhile =
+pWhile :: Parser CompositeStmt
+pWhile =
   do
     reserved "while"
-    expr <- parseExpr
+    expr <- pExpr
     reserved "do"
-    body <- many1 parseStmt
+    body <- many1 pStmt
     reserved "od"
     return $ WhileBlock expr body
     <?> "while block"
@@ -294,39 +290,35 @@ parseWhile =
 -- Records
 --
 
-parseRecordDef :: Parser RecordDef
-parseRecordDef =
-  do
-    reserved "record"
-    fields <- braces $ sepBy1 parseField semi
-    ident <- identifier
-    semi
-    return $ RecordDef ident fields
-    <?> "record definition"
+pRecordDef :: Parser RecordDef
+pRecordDef =
+  reserved "record" *> liftA2 RecordDef pFields identifier <* semi <?> "record definition"
+  where
+    pFields = braces $ sepBy1 pField semi
 
-parseField :: Parser FieldDecl
-parseField =
-  FieldDecl <$> parseBuiltinType <*> identifier
+pField :: Parser FieldDecl
+pField =
+  FieldDecl <$> pBuiltinType <*> identifier
     <?> "field declaration"
 
 --
 -- Arrays
 --
 
-parseArrayDef :: Parser ArrayDef
-parseArrayDef =
+pArrayDef :: Parser ArrayDef
+pArrayDef =
   do
     reserved "array"
     size <- fromInteger <$> squares natural
-    arrType <- parseArrayType
+    arrType <- pArrayType
     ident <- identifier
     semi
     return $ ArrayDef ident arrType size
     <?> "array definition"
 
-parseArrayType :: Parser ArrayType
-parseArrayType =
-  ArrBuiltinT <$> parseBuiltinType
+pArrayType :: Parser ArrayType
+pArrayType =
+  ArrBuiltinT <$> pBuiltinType
     <|> ArrAliasT <$> identifier
     <?> "array type"
 
@@ -334,35 +326,35 @@ parseArrayType =
 -- Procedures
 --
 
-parseProc :: Parser Procedure
-parseProc =
-  reserved "procedure" *> liftA2 Procedure parseProcHead parseProcBody
+pProc :: Parser Procedure
+pProc =
+  reserved "procedure" *> liftA2 Procedure pProcHead pProcBody
     <?> "procedure"
 
-parseProcHead :: Parser ProcHead
-parseProcHead =
-  liftA2 ProcHead identifier (parens $ sepBy parseProcParam (symbol ","))
+pProcHead :: Parser ProcHead
+pProcHead =
+  liftA2 ProcHead identifier (parens $ sepBy pProcParam (symbol ","))
     <?> "procedure header"
 
-parseProcBody :: Parser ProcBody
-parseProcBody = liftA2 ProcBody (many parseVarDecl) (braces (many1 parseStmt)) <?> "procedure body"
+pProcBody :: Parser ProcBody
+pProcBody = liftA2 ProcBody (many pVarDecl) (braces $ many1 pStmt) <?> "procedure body"
 
-parseProcParam :: Parser ProcParam
-parseProcParam = liftA2 ProcParam parseProcParamType identifier <?> "parameter"
+pProcParam :: Parser ProcParam
+pProcParam = liftA2 ProcParam pProcParamType identifier <?> "parameter"
 
-parseProcParamType :: Parser ProcParamType
-parseProcParamType =
-  ParamBuiltinT <$> parseBuiltinType <*> tryParsePassType
+pProcParamType :: Parser ProcParamType
+pProcParamType =
+  ParamBuiltinT <$> pBuiltinType <*> tryParsePassType
     <|> ParamAliasT <$> identifier
     <?> "parameter type"
   where
     tryParsePassType = option PassByRef (reserved "val" $> PassByVal)
 
-parseVarDecl :: Parser VarDecl
-parseVarDecl =
+pVarDecl :: Parser VarDecl
+pVarDecl =
   do
     varType <-
-      VarBuiltinT <$> parseBuiltinType
+      VarBuiltinT <$> pBuiltinType
         <|> VarAliasT <$> identifier
         <?> "type"
     idents <- sepBy1 identifier $ symbol ","
@@ -374,21 +366,21 @@ parseVarDecl =
 -- Programs
 --
 
-parseProgram :: Parser Program
-parseProgram =
+pProgram :: Parser Program
+pProgram =
   do
     whiteSpace
-    records <- many parseRecordDef
+    records <- many pRecordDef
     whiteSpace
-    arrays <- many parseArrayDef
+    arrays <- many pArrayDef
     whiteSpace
-    procs <- many1 parseProc
+    procs <- many1 pProc
     whiteSpace
     eof
     return $ Program records arrays procs
 
 parseRooProgram :: String -> Either ParseError Program
-parseRooProgram = parse' parseProgram
+parseRooProgram = parse' pProgram
 
 parse' :: Parser p -> String -> Either ParseError p
 parse' p = runParser (whiteSpace *> p <* whiteSpace <* eof) 0 ""
