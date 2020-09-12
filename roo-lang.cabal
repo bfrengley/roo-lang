@@ -4,13 +4,11 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0578ac13735ec7d9439fedd68bdd2855ca93b9e37e98f1b1bbb3013b8e6d1a69
+-- hash: d7ee03f4cdb76a21aa8c9c0428716df305fe2379906479334364bd3d1e979d3e
 
 name:           roo-lang
 version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/bfrengley/roo-lang#readme>
-homepage:       https://github.com/bfrengley/roo-lang#readme
-bug-reports:    https://github.com/bfrengley/roo-lang/issues
+description:    Please see the README on GitLab at <https://gitlab.unimelb.edu.au/sjwebb/pli-project-1#readme>
 author:         Ben Frengley
 maintainer:     bfrengley@student.unimelb.edu.au
 copyright:      2020 Ben Frengley
@@ -20,10 +18,6 @@ build-type:     Simple
 extra-source-files:
     README.md
     ChangeLog.md
-
-source-repository head
-  type: git
-  location: https://github.com/bfrengley/roo-lang
 
 library
   exposed-modules:
@@ -36,9 +30,7 @@ library
       src
   build-depends:
       base >=4.7 && <5
-    , hspec
     , parsec
-    , paths
     , text
   default-language: Haskell2010
 
@@ -51,9 +43,7 @@ executable Roo
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
-    , hspec
     , parsec
-    , paths
     , pretty-simple
     , roo-lang
     , text

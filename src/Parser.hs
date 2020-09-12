@@ -62,9 +62,6 @@ reserved = Q.reserved rooScanner
 reservedOp :: String -> Parser ()
 reservedOp = Q.reservedOp rooScanner
 
-inSpaces :: (String -> Parser ()) -> String -> Parser ()
-inSpaces parser input = space *> parser input <* space
-
 reservedWords :: [String]
 reservedWords =
   [ "and",
@@ -372,14 +369,9 @@ pVarDecl =
 pProgram :: Parser Program
 pProgram =
   do
-    whiteSpace
     records <- many pRecordDef
-    whiteSpace
     arrays <- many pArrayDef
-    whiteSpace
     procs <- many1 pProc
-    whiteSpace
-    eof
     return $ Program records arrays procs
 
 parseRooProgram :: String -> Either ParseError Program

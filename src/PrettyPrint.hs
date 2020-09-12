@@ -86,7 +86,6 @@ rhsMinusPrecedence = 16
 
 unOpPrecedence :: UnaryOp -> Precedence
 unOpPrecedence OpNot = 9
--- this is higher than expected to allow us to do special handling of mul/div associativity
 unOpPrecedence OpNeg = 21
 
 pPrintLval :: LValue -> T.Text

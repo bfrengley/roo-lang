@@ -62,6 +62,9 @@ procedure parens ()
     n <- (not not true) and (not false);
     n <- not 1 + not 2 and 3;
     n <- (not (1 + (not 2))) and 3;
+
+    y <- a = (b < x);
+    y <- a = ((a = b) < x);
 }
 
 procedure main ()

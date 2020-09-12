@@ -1,6 +1,5 @@
 name:                roo-lang
 version:             0.1.0.0
-github:              "bfrengley/roo-lang"
 license:             BSD3
 author:              "Ben Frengley"
 maintainer:          "bfrengley@student.unimelb.edu.au"
@@ -17,13 +16,11 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/bfrengley/roo-lang#readme>
+description:         Please see the README on GitLab at <https://gitlab.unimelb.edu.au/sjwebb/pli-project-1#readme>
 
 dependencies:
 - base >= 4.7 && < 5
 - parsec
-- hspec
-- paths
 - text
 
 library:

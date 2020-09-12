@@ -1,0 +1,23 @@
+#!/bin/bash
+
+succeed=0
+total=0
+
+roo="$(realpath "$(dirname $0)/bin/Roo")"
+
+pushd "$(dirname $0)/examples" >/dev/null
+for file in *.roo; do
+    echo "---TEST CASE: $file---"
+    if ! $roo -c $file; then
+        $roo -p $file > $file.pretty
+        $roo -p $file.pretty > $file.pretty.2
+        diff $file.pretty $file.pretty.2
+    else
+        ((succeed++))
+    fi
+    ((total++))
+done
+
+rm -f *.pretty*
+popd >/dev/null
+echo "$succeed/$total test cases successful."
