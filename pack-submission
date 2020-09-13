@@ -1,0 +1,4 @@
+#!/bin/bash
+TARGET="${1:-"$(basename "$(dirname "$(realpath $0)")")"}"
+zip -r "$TARGET".zip app/ src/ Makefile package.yaml roo-lang.cabal Setup.hs stack.submit.yaml
+echo "created submission file $TARGET.zip"
