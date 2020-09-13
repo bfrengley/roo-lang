@@ -1,3 +1,6 @@
+-- Stewart Webb - sjwebb@student.unimelb.edu.au
+-- Ben Frengley - bfrengley@student.unimelb.edu.au
+
 module Main where
 
 import AST (Program)

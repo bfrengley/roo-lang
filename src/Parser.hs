@@ -1,8 +1,14 @@
-module Parser where
+-- |
+-- Module: Parser
+-- Description: This module defines the parser for a Roo program.
+-- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
+--             Ben Frengley <bfrengley@student.unimelb.edu.au>
+module Parser (parseRooProgram) where
 
 import AST
 import Control.Applicative (Applicative (liftA2))
 import Data.Functor (($>))
+import Data.Functor.Identity (Identity)
 import Text.Parsec
 import Text.Parsec.Expr
 import Text.Parsec.Language (emptyDef)
@@ -33,7 +39,7 @@ natural :: Parser Integer
 natural = Q.natural rooScanner
 
 identifier :: Parser Ident
-identifier = Q.identifier rooScanner
+identifier = Ident <$> Q.identifier rooScanner
 
 semi :: Parser String
 semi = Q.semi rooScanner
@@ -110,6 +116,7 @@ operatorNames =
 -- Operators
 --
 
+operatorTable :: [[Operator String Int Identity Expr]]
 operatorTable =
   [ [binaryOp "*" OpMul, binaryOp "/" OpDiv],
     [binaryOp "+" OpPlus, binaryOp "-" OpMinus],
@@ -121,27 +128,35 @@ operatorTable =
       binaryRelOp ">=" OpGreaterEq
     ],
     [chainableUnaryOp "not" OpNot],
-    [binaryRelTextOp "and" OpAnd],
-    [binaryRelTextOp "or" OpOr]
+    [binaryRelOp "and" OpAnd],
+    [binaryRelOp "or" OpOr]
   ]
   where
-    defBinaryOp assoc pOp name op =
+    -- A helper function for defining infix binary operators
+    defBinaryOp assoc name op =
       Infix
         ( do
-            pOp name
+            reservedOp name
             return $ BinOpExpr op
         )
         assoc
 
-    binaryOp = defBinaryOp AssocLeft reservedOp
-    binaryRelOp = defBinaryOp AssocNone reservedOp
-    binaryRelTextOp = defBinaryOp AssocNone symbol
-    -- This is a little obscure
+    -- left-associative operators
+    binaryOp = defBinaryOp AssocLeft
+    -- non-associative operators
+    binaryRelOp = defBinaryOp AssocNone
+
+    -- this is a little obscure
+    -- 'buildExpressionParser' doesn't support repeated prefix operators, so this works around that
+    -- by using 'chainl1' we can greedily parse as many prefix operators as possible and treat it
+    -- as parsing a single operator
+    -- we only partially apply 'UnOpExpr', so we can just chain them together with `.`
     chainableUnaryOp name op =
       let compose = pure (.)
           pUnaryOp = reservedOp name $> UnOpExpr op
        in Prefix $ chainl1 pUnaryOp compose
 
+-- 'pBuiltinType' parses one of the builtin type names, boolean or integer.
 pBuiltinType :: Parser BuiltinType
 pBuiltinType =
   (reserved "boolean" $> TBool <?> "boolean")
@@ -184,22 +199,24 @@ pString :: Parser Expr
 pString =
   do
     char '"'
-    str <- many (normalChar <|> escapedChar)
-    symbol "\""
+    str <- many (normalChar <|> escapedChar <?> "allowed character")
+    symbol "\"" <?> "end of string"
     return $ ConstStr (concat str)
     <?> "string"
   where
-    -- match a backslash followed by: another backslash, a double quote, t, or n
     escapedChar =
       do
         bs <- char '\\'
-        chr <- oneOf ['\\', '"', 't', 'n']
+        chr <- anyChar
         return [bs, chr]
+        <?> ""
 
     -- match any single char other than disallowed whitespace, double quotes, or backslashes
-    normalChar = do
-      c <- noneOf ['\\', '"', '\t', '\n']
-      return [c]
+    normalChar =
+      do
+        c <- noneOf ['\\', '"', '\t', '\n']
+        return [c]
+        <?> ""
 
 pIdent :: Parser Expr
 pIdent = LVal <$> pLval <?> "identifier"
@@ -314,7 +331,15 @@ pArrayDef =
     <?> "array definition"
 
 pPosNum :: Parser Integer
-pPosNum = read <$> liftA2 (:) (oneOf "123456789" <?> "") (many digit <?> "") <?> "positive number"
+pPosNum =
+  try
+    ( do
+        n <- natural <?> ""
+        if n > 0
+          then return n
+          else parserZero
+    )
+    <?> "positive number"
 
 pArrayType :: Parser ArrayType
 pArrayType =

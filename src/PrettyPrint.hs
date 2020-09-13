@@ -1,3 +1,5 @@
+-- Stewart Webb - sjwebb@student.unimelb.edu.au
+-- Ben Frengley - bfrengley@student.unimelb.edu.au
 {-# LANGUAGE OverloadedStrings #-}
 
 module PrettyPrint where
@@ -8,21 +10,6 @@ import Data.Maybe (maybe)
 import qualified Data.Text as T
 import qualified Data.Text.IO as I
 
--- prettyPrint :: Program -> T.Text
--- prettyPrint rootNode =
---     case rootNode of
---         Procedure -> "[Procedure]"
-
--- prettyPrint :: Program -> IO ()
--- prettyPrint (Program records arrs procs) =
---   do
---     map printRecord records
-
--- printRecord :: Record -> IO ()
--- printRecord record =
---   firstRec:nextRecs
---   where firstRec:nextRecs = records
-
 prettyPrint :: Program -> T.Text
 prettyPrint (Program recordDefs arrayDefs procDefs) =
   let records = map pPrintRecord recordDefs
@@ -32,9 +19,6 @@ prettyPrint (Program recordDefs arrayDefs procDefs) =
    in case defs of
         [] -> T.unlines procs
         _ -> T.unlines $ defs <> [""] <> procs
-
--- case rootNode of
---     Procedure -> "[Procedure]"
 
 --
 -- Expressions
@@ -259,8 +243,8 @@ pPrintBuiltinType :: BuiltinType -> T.Text
 pPrintBuiltinType TBool = "boolean"
 pPrintBuiltinType TInt = "integer"
 
-pPrintIdent :: String -> T.Text
-pPrintIdent = T.pack
+pPrintIdent :: Ident -> T.Text
+pPrintIdent (Ident i) = T.pack i
 
 indent :: T.Text -> T.Text
 indent s = "    " <> s

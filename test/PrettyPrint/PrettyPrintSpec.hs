@@ -1,3 +1,6 @@
+-- Stewart Webb - sjwebb@student.unimelb.edu.au
+-- Ben Frengley - bfrengley@student.unimelb.edu.au
+
 -- this is needed to access __FILE__ macro
 {-# LANGUAGE CPP #-}
 module PrettyPrint.PrettyPrintSpec (spec) where

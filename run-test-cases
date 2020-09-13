@@ -8,7 +8,7 @@ roo="$(realpath "$(dirname $0)/bin/Roo")"
 pushd "$(dirname $0)/examples" >/dev/null
 for file in *.roo; do
     echo "---TEST CASE: $file---"
-    if ! $roo -c $file; then
+    if [ "$($roo -c $file)" != "OK." ]; then
         $roo -p $file > $file.pretty
         $roo -p $file.pretty > $file.pretty.2
         diff $file.pretty $file.pretty.2
