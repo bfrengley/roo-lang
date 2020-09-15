@@ -1,0 +1,3 @@
+#!/bin/bash
+submit COMP90045 1b Roo.hs AST.hs Parser.hs PrettyPrint.hs Makefile Roo.cabal Setup.hs
+

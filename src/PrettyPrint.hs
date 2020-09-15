@@ -45,7 +45,7 @@ binOpPrecedence OpMul = 18
 binOpPrecedence OpDiv = 18
 
 isNonAssoc :: Precedence -> Bool
-isNonAssoc prec = prec == 12 || prec == 6 || prec == 3
+isNonAssoc prec = prec == 12
 
 -- Harald why
 -- Non-associative operators can only be chained if parentheses are present, as opposed to

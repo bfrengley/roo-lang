@@ -128,8 +128,8 @@ operatorTable =
       binaryRelOp ">=" OpGreaterEq
     ],
     [chainableUnaryOp "not" OpNot],
-    [binaryRelOp "and" OpAnd],
-    [binaryRelOp "or" OpOr]
+    [binaryOp "and" OpAnd],
+    [binaryOp "or" OpOr]
   ]
   where
     -- A helper function for defining infix binary operators
@@ -178,7 +178,7 @@ pFac =
       pNum,
       pBool,
       pString,
-      pIdent
+      pLvalExpr
     ]
     <?> "simple expression"
 
@@ -218,8 +218,8 @@ pString =
         return [c]
         <?> ""
 
-pIdent :: Parser Expr
-pIdent = LVal <$> pLval <?> "identifier"
+pLvalExpr :: Parser Expr
+pLvalExpr = LVal <$> pLval <?> "identifier"
 
 pLval :: Parser LValue
 pLval =
