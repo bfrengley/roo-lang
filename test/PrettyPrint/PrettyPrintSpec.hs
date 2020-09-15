@@ -8,6 +8,7 @@ module PrettyPrint.PrettyPrintSpec (spec) where
 -- import System.Environment
 import System.Path
 -- import Sy    stem.FilePath
+import Data.Text
 
 import Test.Hspec
 
@@ -25,7 +26,7 @@ spec = do
   describe "prettyPrint" $ do
     it "pretty-prints simpleTest1" $ do
       prettyPrintTestCode <- getFixture "simpleTest1.roo"
-      prettyPrint simpleText1Ast `shouldBe` prettyPrintTestCode
+      prettyPrint simpleText1Ast `shouldBe` Data.Text.pack prettyPrintTestCode
         where
             -- prettyPrintTestCode = "blah blah blah blah"
             simpleText1Ast =
@@ -36,18 +37,18 @@ spec = do
                         Procedure
                             (
                                 ProcHead
-                                    "main"
+                                    (Ident "main")
                                     [
-                                        ProcParam (BoolParam PassByVal) "arg1"
+                                        ProcParam (ParamBuiltinT TBool PassByRef) (Ident "arg1")
                                     ]
                             )
                             (
                                 ProcBody
                                     [
-                                        VarDecl BoolVar ["myBool"]
+                                        VarDecl (VarBuiltinT TBool) [Ident "myBool"]
                                     ]
                                     [
-                                        WriteLn (ConstStr "Hello World!")
+                                        SAtom (Write (ConstStr "Hello World!"))
                                     ]
                             )
                     ]

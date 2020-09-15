@@ -1,4 +1,4 @@
-procedure main(boolean arg1)
+procedure main (boolean arg1)
     boolean myBool;
 {
     write "Hello World!";
