@@ -25,7 +25,7 @@ main =
     case output of
       Right ast ->
         case opt of
-          Just OPrint -> I.putStrLn $ prettyPrint ast
+          Just OPrint -> I.putStr $ prettyPrint ast
           Just OAST -> pPrint ast
           Just OCompare ->
             if isPrintParseIdempotent ast
@@ -59,7 +59,6 @@ checkArgs progname _ =
 
 isPrintParseIdempotent :: Program -> Bool
 isPrintParseIdempotent ast =
-  let printParse = parseRooProgram . T.unpack . prettyPrint
-      oneRound = printParse ast
-      twoRounds = oneRound >>= printParse
-   in oneRound == twoRounds
+  let firstPrint = return $ prettyPrint ast
+      secondPrint = prettyPrint <$> (firstPrint >>= parseRooProgram . T.unpack)
+   in firstPrint == secondPrint

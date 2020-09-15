@@ -5,6 +5,8 @@ total=0
 
 roo="$(realpath "$(dirname $0)/bin/Roo")"
 
+stack build --copy-bins --local-bin-path ./bin
+
 pushd "$(dirname $0)/examples" >/dev/null
 for file in *.roo; do
     echo "---TEST CASE: $file---"

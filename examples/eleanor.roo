@@ -21,6 +21,7 @@ boolean other_Value';
     c <- --1;
     a <-- 1;
     a <- 2/-1;
+    a <------ 1;
 
     bool <- true and (5 or 3 = 2 and not - never);
     if 2 > 3 then
@@ -33,4 +34,3 @@ boolean other_Value';
     call test ( 3 + 2,2 - 1 )  ; 
     writeln ((13+(3*5)*7)-(2*7))-(11/(20/(2*5)));
 }
-

@@ -12,13 +12,14 @@ import qualified Data.Text.IO as I
 
 prettyPrint :: Program -> T.Text
 prettyPrint (Program recordDefs arrayDefs procDefs) =
-  let records = map pPrintRecord recordDefs
+  let records = concatMap pPrintRecord recordDefs
       arrays = map pPrintArrayDef arrayDefs
-      procs = concatMap pPrintProcedure procDefs
-      defs = concat records <> arrays
-   in case defs of
-        [] -> T.unlines procs
-        _ -> T.unlines $ defs <> [""] <> procs
+      -- insert a blank line between each procedure
+      procs = intercalate [""] $ map pPrintProcedure procDefs
+      defs = records <> arrays
+   in T.unlines $ case defs of
+        [] -> procs
+        _ -> defs <> [""] <> procs
 
 --
 -- Expressions
@@ -224,7 +225,7 @@ pPrintProcBody (ProcBody vars body) =
     [ indentMap pPrintVarDecl vars,
       ["{"],
       indentMany pPrintStmt body,
-      ["}", ""]
+      ["}"]
     ]
 
 pPrintVarDecl :: VarDecl -> T.Text
