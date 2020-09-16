@@ -3,10 +3,19 @@
 -- Description: This module defines the parser for a Roo program.
 -- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
 --             Ben Frengley <bfrengley@student.unimelb.edu.au>
+--
+-- This module exports a function 'parseRooProgram' which can be used to attempt to parse a string
+-- as a valid and complete Roo program.
+--
+-- This module is defined in a bottom-up order, beginning with parsers for smaller components of
+-- the Roo grammar and building them up into a complete parser. Where simple enough to be easily
+-- understood we prefer the applicative approach for defining parsers because it more closely
+-- mirrors the grammar it is parsing, but for more complex parsers do notation is used instead for
+-- clarity.
 module Parser (parseRooProgram) where
 
 import AST
-import Control.Applicative (Applicative (liftA2))
+import Control.Applicative (Applicative (liftA2), liftA3)
 import Data.Functor (($>))
 import Data.Functor.Identity (Identity)
 import Text.Parsec
@@ -14,9 +23,14 @@ import Text.Parsec.Expr
 import Text.Parsec.Language (emptyDef)
 import qualified Text.Parsec.Token as Q
 
+--
+-- Convenience aliases for Parsec functions
+--
+
 type Parser a =
   Parsec String Int a
 
+-- | 'rooScanner' defines a Parsec token parser for the Roo grammar.
 rooScanner :: Q.TokenParser Int
 rooScanner =
   Q.makeTokenParser
@@ -171,7 +185,7 @@ operatorTable =
           pUnaryOp = reservedOp name $> UnOpExpr op
        in Prefix $ chainl1 pUnaryOp compose
 
--- 'pBuiltinType' parses one of the builtin type names, boolean or integer.
+-- | 'pBuiltinType' parses one of the builtin type names, boolean or integer.
 pBuiltinType :: Parser BuiltinType
 pBuiltinType =
   (reserved "boolean" $> TBool <?> "boolean")
@@ -286,31 +300,39 @@ pStmt =
 pCompositeStmt :: Parser Stmt
 pCompositeStmt = SComp <$> choice [pIf, pWhile] <?> ""
 
--- | 'pAtomicStmt' defines a parser for an atomic statement.
+-- | 'pAtomicStmt' defines a parser for an atomic statement (assignment, `read`, `write`/`writeln`,
+-- or a procedure call).
 pAtomicStmt :: Parser Stmt
 pAtomicStmt =
   SAtom <$> choice [pAssign, pRead, pWrite, pWriteLn, pCall] <* semi <?> ""
 
+-- | 'pAssign' defines a parser for an assignment statement.
 pAssign :: Parser AtomicStmt
 pAssign =
   Assign <$> (pLval <* reservedOp "<-") <*> pExpr
     <?> "assignment"
 
+-- | 'pRead' defines a parser for a read statement (reading a value from stdin into a variable).
 pRead :: Parser AtomicStmt
 pRead =
   Read <$> (reserved "read" *> pLval)
     <?> "read"
 
+-- | 'pWrite' defines a parser for a write statement (writing an expression to stdout without a
+-- trailing newline).
 pWrite :: Parser AtomicStmt
 pWrite =
   Write <$> (reserved "write" *> pExpr)
     <?> "write"
 
+-- | 'pWriteLn' defines a parser for a writeln statement (writing an expression to stdout with a
+-- trailing newline).
 pWriteLn :: Parser AtomicStmt
 pWriteLn =
   WriteLn <$> (reserved "writeln" *> pExpr)
     <?> "writeln"
 
+-- | 'pCall' defines a parser for a call statement (calling a procedure with a list of arguments).
 pCall :: Parser AtomicStmt
 pCall =
   reserved "call" *> liftA2 Call identifier pArgs
@@ -318,6 +340,7 @@ pCall =
   where
     pArgs = parens $ commaSep pExpr
 
+-- | 'pIf' defines a parser for an if statement, with an optional else block.
 pIf :: Parser CompositeStmt
 pIf =
   do
@@ -330,6 +353,7 @@ pIf =
     return $ IfBlock expr mainBody elseBody
     <?> "if block"
 
+-- | 'pWhile' defines a parser for a while statement.
 pWhile :: Parser CompositeStmt
 pWhile =
   do
@@ -345,6 +369,7 @@ pWhile =
 -- Records
 --
 
+-- | 'pRecordDef' defines a parser for a record type definition.
 pRecordDef :: Parser RecordDef
 pRecordDef =
   reserved "record" *> liftA2 RecordDef pFields identifier <* semi
@@ -352,6 +377,8 @@ pRecordDef =
   where
     pFields = braces $ semiSep1 pField
 
+-- | 'pField' defines a parser for a field declaration in a record type. A field must be of a
+-- builtin type.
 pField :: Parser FieldDecl
 pField =
   FieldDecl <$> pBuiltinType <*> identifier
@@ -361,19 +388,15 @@ pField =
 -- Arrays
 --
 
+-- | 'pArrayDef' defines a parser for an array type definition.
 pArrayDef :: Parser ArrayDef
 pArrayDef =
-  do
-    reserved "array"
-    size <- squares pPosNum
-    arrType <- pArrayType
-    ident <- identifier
-    semi
-    return $ ArrayDef ident arrType size
+  reserved "array" *> liftA3 ArrayDef (squares pPosInt) pArrayType identifier <* semi
     <?> "array definition"
 
-pPosNum :: Parser Integer
-pPosNum =
+-- | 'pPosInt' defines a parser for a positive decimal, hexadecimal, or octal integer.
+pPosInt :: Parser Integer
+pPosInt =
   try
     ( do
         n <- natural <?> ""
@@ -381,8 +404,10 @@ pPosNum =
           then return n
           else parserZero
     )
-    <?> "positive number"
+    <?> "positive integer"
 
+-- | 'pArrayType' defines a parser for an array type, which can either be a builtin type or a
+-- previously defined record type.
 pArrayType :: Parser ArrayType
 pArrayType =
   ArrBuiltinT <$> pBuiltinType
@@ -393,26 +418,35 @@ pArrayType =
 -- Procedures
 --
 
+-- | 'pProc' defines a parser for a complete procedure definition.
 pProc :: Parser Procedure
 pProc =
   reserved "procedure" *> liftA2 Procedure pProcHead pProcBody
     <?> "procedure"
 
+-- | 'pProcHead' defines a parser for a procedure header (the procedure name and a comma-separated
+-- list of procedure parameters).
 pProcHead :: Parser ProcHead
 pProcHead =
   liftA2 ProcHead identifier (parens $ commaSep pProcParam)
     <?> "procedure header"
 
+-- | 'pProcBody' defines a parser for a procedure body (local variable declarations and a series
+-- of brace-enclosed statements).
 pProcBody :: Parser ProcBody
 pProcBody =
   liftA2 ProcBody (many pVarDecl) (braces $ many1 pStmt)
     <?> "procedure body"
 
+-- | 'pProcParam' defines a parser for a procedure parameter.
 pProcParam :: Parser ProcParam
 pProcParam =
   liftA2 ProcParam pProcParamType identifier
     <?> "parameter"
 
+-- | 'pProcParamType' defines a parser for the type of a procedure parameter. A procedure parameter
+-- type can be a builtin type with an optional `val` keyword to indicate that it is passed by value,
+-- or a record or array type name.
 pProcParamType :: Parser ProcParamType
 pProcParamType =
   ParamBuiltinT <$> pBuiltinType <*> pPassMode
@@ -421,6 +455,8 @@ pProcParamType =
   where
     pPassMode = option PassByRef (reserved "val" $> PassByVal)
 
+-- | 'pVarDecl' defines a parser for a variable declaration. A declaration can declare multiple
+-- variables, all of the same type.
 pVarDecl :: Parser VarDecl
 pVarDecl =
   do
@@ -437,16 +473,19 @@ pVarDecl =
 -- Programs
 --
 
+-- | 'pProgram' defines a parser for a full Roo program, consisting of any number of record
+-- type definitions, any number of array type definitions, and at least one procedure.
 pProgram :: Parser Program
-pProgram =
-  do
-    records <- many pRecordDef
-    arrays <- many pArrayDef
-    procs <- many1 pProc
-    return $ Program records arrays procs
+pProgram = liftA3 Program (many pRecordDef) (many pArrayDef) (many1 pProc)
 
+-- | 'parseRooProgram' attempts to parse a string as a complete Roo program. The whole string is
+-- consumed. If the parsing fails, the first parse error encountered is returned; the parser does
+-- not attempt to continue on encountering an error. Should the parse succeed, the full 'Program'
+-- AST is returned.
 parseRooProgram :: String -> Either ParseError Program
 parseRooProgram = parse' pProgram
 
+-- | 'parse'' is a convenience method for applying a parser to a complete string, discarding
+-- leading and trailing whitespace and expecting the parser to consume the rest of the string.
 parse' :: Parser p -> String -> Either ParseError p
 parse' p = runParser (whiteSpace *> p <* whiteSpace <* eof) 0 ""

@@ -128,7 +128,7 @@ data ArrayType
   | ArrAliasT Ident
   deriving (Eq, Show)
 
-data ArrayDef = ArrayDef Ident ArrayType Integer
+data ArrayDef = ArrayDef Integer ArrayType Ident
   deriving (Eq, Show)
 
 data ProcParamPassMode

@@ -149,7 +149,7 @@ pPrintAtomicStmt (Read lval) = "read " <> pPrintLval lval
 pPrintAtomicStmt (Write expr) = "write " <> pPrintExpr expr
 pPrintAtomicStmt (WriteLn expr) = "writeln " <> pPrintExpr expr
 pPrintAtomicStmt (Call ident exprs) =
-  let exprList = T.intercalate ", " $ map pPrintExpr exprs
+  let exprList = commaSep pPrintExpr exprs
    in "call " <> pPrintIdent ident <> "(" <> exprList <> ")"
 
 pPrintCompositeStmt :: CompositeStmt -> [T.Text]
@@ -194,7 +194,7 @@ pPrintRecord (RecordDef (field : fields) name) =
 --
 
 pPrintArrayDef :: ArrayDef -> T.Text
-pPrintArrayDef (ArrayDef name t size) =
+pPrintArrayDef (ArrayDef size t name) =
   semi $ T.unwords ["array[" <> showT size <> "]", pPrintArrayType t, pPrintIdent name]
   where
     pPrintArrayType t = case t of
@@ -211,7 +211,7 @@ pPrintProcedure (Procedure head body) = pPrintProcHead head : pPrintProcBody bod
 pPrintProcHead :: ProcHead -> T.Text
 pPrintProcHead (ProcHead name params) =
   let pPrintParam (ProcParam t ident) = T.unwords [pPrintParamType t, pPrintIdent ident]
-      paramList = T.intercalate ", " (map pPrintParam params)
+      paramList = commaSep pPrintParam params
    in T.unwords ["procedure", pPrintIdent name, "(" <> paramList <> ")"]
 
 pPrintParamType :: ProcParamType -> T.Text
@@ -230,7 +230,7 @@ pPrintProcBody (ProcBody vars body) =
 
 pPrintVarDecl :: VarDecl -> T.Text
 pPrintVarDecl (VarDecl t names) =
-  semi $ pPrintVarType t <> " " <> T.intercalate ", " (map pPrintIdent names)
+  semi $ pPrintVarType t <> " " <> commaSep pPrintIdent names
 
 pPrintVarType :: VarType -> T.Text
 pPrintVarType (VarBuiltinT t) = pPrintBuiltinType t
@@ -258,6 +258,9 @@ indentMap f = map (indent . f)
 
 semi :: T.Text -> T.Text
 semi s = s <> ";"
+
+commaSep :: (a -> T.Text) -> [a] -> T.Text
+commaSep f = T.intercalate ", " . map f
 
 showT :: Show a => a -> T.Text
 showT = T.pack . show
