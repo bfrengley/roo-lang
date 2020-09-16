@@ -201,7 +201,8 @@ pExpr =
   buildExpressionParser operatorTable pFac
     <?> "expression"
 
--- | 'pFac' defines a parser for factors of expressions.
+-- | 'pFac' defines a parser for factors of expressions, where a factor is a simple expression
+-- which is an operand of a complex expression (i.e., one with an operator).
 pFac :: Parser Expr
 pFac =
   choice

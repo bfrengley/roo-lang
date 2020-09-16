@@ -4,11 +4,12 @@
 -- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
 --             Ben Frengley <bfrengley@student.unimelb.edu.au>
 --
---  A Roo program consists of: any number of record type definitions, any number of array type
---  definitions, and at least one procedure definition.
+-- A Roo program consists of: any number of record type definitions, any number of array type
+-- definitions, and at least one procedure definition. The AST of a Roo program is represented
+-- by the 'Program' type.
 --
---  This module is defined in a bottom-up order, beginning with the smaller components of the grammar
---  and building up to a full Roo program.
+-- This module is defined in a bottom-up order, beginning with the smaller components of the grammar
+-- and building up to a full Roo program.
 module AST where
 
 -- | 'Ident' encodes a Roo identifier.
@@ -75,7 +76,8 @@ data BinaryOp
 
 -- | 'Expr' encodes a Roo expression.
 data Expr
-  = -- | 'LVal' represents an 'LValue' expression.
+  = -- | 'LVal' represents an 'LValue' expression, where an lvalue is something to which a value
+    -- may be assigned.
     LVal LValue
   | -- | 'ConstBool' represents a compile-time boolean constant (i.e., `true` or `false`).
     ConstBool Bool
@@ -94,71 +96,129 @@ data Expr
   deriving (Eq, Show)
 
 -- | 'LValue' represents an lvalue (something to which a value may be assigned). An lvalue consists
--- of an identifier, optionally followed by an index expression, optionally followed by a record
--- field access.
+-- of an identifier, optionally followed by an array index expression, optionally followed by a
+-- record field access.
 data LValue = LValue Ident (Maybe Expr) (Maybe Ident)
   deriving (Eq, Show)
 
-data Stmt = SAtom AtomicStmt | SComp CompositeStmt
+-- | 'Stmt' represents a statement, which can be a single atomic statement or a multi-line composite
+-- statement.
+data Stmt
+  = -- | 'SAtom' represents an atomic statement (i.e., a statement which cannot be subdivided into
+    -- smaller statements).
+    SAtom AtomicStmt
+  | -- | 'SComp' represents a composite statement (i.e., a statement which is made up of a number
+    -- of other statements, which can themselves be atomic or composite).
+    SComp CompositeStmt
   deriving (Eq, Show)
 
+-- | 'AtomicStmt' represents one of the five types of atomic statement.
 data AtomicStmt
-  = Assign LValue Expr
-  | Read LValue
-  | Write Expr
-  | WriteLn Expr
-  | Call Ident [Expr]
+  = -- | 'Assign' represents an assignment statement (storing the value of an expression in an
+    -- lvalue).
+    Assign LValue Expr
+  | -- | 'Read' represents a read statement (reading a value from stdin into an lvalue).
+    Read LValue
+  | -- | 'Write' represents a write statement (writing the value of an expression to stdout without a
+    -- trailing newline).
+    Write Expr
+  | -- | 'WriteLn' represents a writeln statement (writing the value an expression to stdout with a
+    -- trailing newline).
+    WriteLn Expr
+  | -- | 'Call' represents a procedure call statement (calling a given procedure with the values of
+    -- the provided list of expressions as its arguments).
+    Call Ident [Expr]
   deriving (Eq, Show)
 
+-- | 'CompositeStmt' represents a statement itself made up of other statements.
 data CompositeStmt
-  = IfBlock Expr [Stmt] [Stmt]
-  | WhileBlock Expr [Stmt]
+  = -- | 'IfBlock' represents an if-else statement. If no else clause is present in the source
+    -- statement, the second list of 'Stmt' will be empty.
+    IfBlock Expr [Stmt] [Stmt]
+  | -- | 'WhileBlock' represents a while loop.
+    WhileBlock Expr [Stmt]
   deriving (Eq, Show)
 
-data BuiltinType = TBool | TInt deriving (Eq, Show)
+-- | 'BuiltinType' represents the two builtin Roo types, booleans and integers.
+data BuiltinType
+  = -- | 'TBool' represents the builtin `boolean` type.
+    TBool
+  | -- | 'TInt' represents the builtin `integer` type.
+    TInt
+  deriving (Eq, Show)
 
+-- | 'FieldDecl' represents a record field declaration, consisting of a type and field name.
 data FieldDecl = FieldDecl BuiltinType Ident
   deriving (Eq, Show)
 
+-- | 'RecordDef' represents a record type declaration, which contains at least one field declaration.
 data RecordDef = RecordDef [FieldDecl] Ident
   deriving (Eq, Show)
 
+-- | 'ArrayType' represents the underlying type of an array type, which may be a builtin type or a
+-- another declared type.
 data ArrayType
-  = ArrBuiltinT BuiltinType
-  | ArrAliasT Ident
+  = -- | 'ArrBuiltinT' represents an underlying builtin type.
+    ArrBuiltinT BuiltinType
+  | -- | 'ArrAliasT' represents an underlying declared type.
+    ArrAliasT Ident
   deriving (Eq, Show)
 
+-- | 'ArrayDef' represents an array type definition. Arrays have a set (positive integer) size, an
+-- underlying type, and a name.
 data ArrayDef = ArrayDef Integer ArrayType Ident
   deriving (Eq, Show)
 
+-- | 'ProcParamPassMode' represents how a procedure parameter is passed: by reference, or by value.
+-- This only applies to builtin types; declared types are always passed by reference.
 data ProcParamPassMode
-  = PassByRef
-  | PassByVal
+  = -- | 'PassByRef' indicates that the parameter is passed by reference.
+    PassByRef
+  | -- | 'PassByVal' indicates that the parameter is passed by value.
+    PassByVal
   deriving (Eq, Show)
 
+-- | 'ProcParamType' represents the type of a procedure parameter.
 data ProcParamType
-  = ParamBuiltinT BuiltinType ProcParamPassMode
-  | ParamAliasT Ident
+  = -- | 'ParamBuiltinT' represents a parameter of a builtin type and whether it is passed by
+    -- reference or value.
+    ParamBuiltinT BuiltinType ProcParamPassMode
+  | -- | 'ParamAliasT' represents a parameter of a declared type.
+    ParamAliasT Ident
   deriving (Eq, Show)
 
+-- | 'ProcParam' represents a procedure parameter, including its type and name.
 data ProcParam = ProcParam ProcParamType Ident
   deriving (Eq, Show)
 
+-- | 'ProcHead' represents a procedure header: the procedure name and its (possibly empty) list of
+-- parameters.
 data ProcHead = ProcHead Ident [ProcParam]
   deriving (Eq, Show)
 
--- this is the same type as ArrayType
-data VarType = VarBuiltinT BuiltinType | VarAliasT Ident
+-- | 'VarType' represents the type of a variable.
+data VarType
+  = -- | 'VarBuiltinT' represents a variable of a builtin type.
+    VarBuiltinT BuiltinType
+  | -- | 'VarAliasT' represents a variable of a declared type.
+    VarAliasT Ident
   deriving (Eq, Show)
 
+-- | 'VarDecl' represents a variable declaration. A declaration can include multiple different
+-- variable names, which is equivalent to declaring multiple variables of the same shared type.
 data VarDecl = VarDecl VarType [Ident]
   deriving (Eq, Show)
 
+-- | 'ProcBody' represents the body of a procedure, including the (possibly empty) list of
+-- local variable declarations, and the list of statements which are executed.
 data ProcBody = ProcBody [VarDecl] [Stmt]
   deriving (Eq, Show)
 
+-- | 'Procedure' represents a complete procedure definition.
 data Procedure = Procedure ProcHead ProcBody
   deriving (Eq, Show)
 
+-- | 'Program' represents a full Roo program: a (possibly empty) series of record definitions,
+-- a (possibly empty) series of array definitions, and a series of procedure definitions.
 data Program = Program [RecordDef] [ArrayDef] [Procedure]
   deriving (Eq, Show)
