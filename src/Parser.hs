@@ -68,6 +68,18 @@ reserved = Q.reserved rooScanner
 reservedOp :: String -> Parser ()
 reservedOp = Q.reservedOp rooScanner
 
+commaSep :: Parser a -> Parser [a]
+commaSep = Q.commaSep rooScanner
+
+commaSep1 :: Parser a -> Parser [a]
+commaSep1 = Q.commaSep1 rooScanner
+
+semiSep :: Parser a -> Parser [a]
+semiSep = Q.semiSep rooScanner
+
+semiSep1 :: Parser a -> Parser [a]
+semiSep1 = Q.semiSep1 rooScanner
+
 reservedWords :: [String]
 reservedWords =
   [ "and",
@@ -118,7 +130,8 @@ operatorNames =
 
 operatorTable :: [[Operator String Int Identity Expr]]
 operatorTable =
-  [ [binaryOp "*" OpMul, binaryOp "/" OpDiv],
+  [ [chainableUnaryOp "-" OpNeg],
+    [binaryOp "*" OpMul, binaryOp "/" OpDiv],
     [binaryOp "+" OpPlus, binaryOp "-" OpMinus],
     [ binaryRelOp "=" OpEq,
       binaryRelOp "!=" OpNeq,
@@ -127,6 +140,8 @@ operatorTable =
       binaryRelOp ">" OpGreater,
       binaryRelOp ">=" OpGreaterEq
     ],
+    -- parsing of `not` is defined both here and later on
+    -- this is for the general case, but it fails to parse `not` in expressions like `a = not b`
     [chainableUnaryOp "not" OpNot],
     [binaryOp "and" OpAnd],
     [binaryOp "or" OpOr]
@@ -149,7 +164,7 @@ operatorTable =
     -- this is a little obscure
     -- 'buildExpressionParser' doesn't support repeated prefix operators, so this works around that
     -- by using 'chainl1' we can greedily parse as many prefix operators as possible and treat it
-    -- as parsing a single operator
+    -- as parsing a single operator, even though it gives the right AST
     -- we only partially apply 'UnOpExpr', so we can just chain them together with `.`
     chainableUnaryOp name op =
       let compose = pure (.)
@@ -166,13 +181,18 @@ pBuiltinType =
 -- Expressions
 --
 
+-- | 'pExpr' defines an expression parser based on the operators in 'operatorTable'.
 pExpr :: Parser Expr
-pExpr = buildExpressionParser operatorTable pFac <?> "expression"
+pExpr =
+  buildExpressionParser operatorTable pFac
+    <?> "expression"
 
+-- | 'pFac' defines a parser for factors of expressions.
 pFac :: Parser Expr
 pFac =
   choice
-    [ pNegOpExpr,
+    [ -- we define `not` parsing again here to handle the case of `not` on the RHS of a higher
+      -- precedence binary operator, like in `a = not b`
       pNotOpExpr,
       parens pExpr,
       pNum,
@@ -182,32 +202,42 @@ pFac =
     ]
     <?> "simple expression"
 
+-- | 'pNum' defines a parser for constant integer expressions. 'pNum' only parses a non-negative
+-- integer, as negation is handled by unary minus.
 pNum :: Parser Expr
 pNum =
-  do
-    n <- natural <?> ""
-    return $ ConstInt (fromInteger n)
+  ConstInt <$> natural
     <?> "number"
 
+-- | 'pBool' defines a parser for constant boolean expressions, i.e., `true` and `false`.
 pBool :: Parser Expr
 pBool =
   reserved "true" $> ConstBool True
     <|> reserved "false" $> ConstBool False
     <?> "boolean"
 
+-- | 'pString' defines a parser for constant strings. A string consists of a pair of double quotes
+-- surrounding any number of characters other than double quotes not preceded by a backslash, tabs,
+-- or newlines. Escape sequences `\"`, `\t`, and `\n` are allowed instead. We additionally allow
+-- `\\` to represent a backslash literal.
+-- This parser parses escape sequences literally, and leaves the handling of them to the Oz virtual
+-- machine. A string will thus preserve all backslashes, even if they are part of an escape sequence.
 pString :: Parser Expr
 pString =
-  do
-    char '"'
-    str <- many (normalChar <|> escapedChar <?> "allowed character")
-    symbol "\"" <?> "end of string"
-    return $ ConstStr (concat str)
+  ConstStr <$> enquoted pString'
     <?> "string"
   where
-    escapedChar =
+    enquoted = between (char '"') (char '"')
+    -- parse a sequence of string-legal characters
+    pString' = concat <$> many (normalChar <|> escapeSeq <?> "allowed character")
+
+    -- 'escapeSeq' matches a backslash followed by another character other than tab/newline
+    -- the pair may not be an actual escape sequence, but we leave them intact regardless
+    escapeSeq =
       do
         bs <- char '\\'
-        chr <- anyChar
+        -- all escape sequences are accepted, as interpreting them is left to the Oz VM
+        chr <- noneOf ['\t', '\n']
         return [bs, chr]
         <?> ""
 
@@ -218,9 +248,16 @@ pString =
         return [c]
         <?> ""
 
+-- | 'pLvalExpr' defines a parser for an lvalue expression. It is merely a wrapper around 'pLval'
+-- that converts it to an expression AST node.
 pLvalExpr :: Parser Expr
-pLvalExpr = LVal <$> pLval <?> "identifier"
+pLvalExpr =
+  LVal <$> pLval
 
+-- | 'pLval' defines a parser for an lvalue. An lvalue may have an index expression if the base
+-- identifier is an array type (e.g., `a[1]`), a field access if the base identifier is a record
+-- type (e.g., `a.b`), or both if the base identifier is an array type containing record types
+-- (e.g., `a[1].b`).
 pLval :: Parser LValue
 pLval =
   do
@@ -230,24 +267,26 @@ pLval =
     return $ LValue ident index field
     <?> "lvalue"
 
-pNegOpExpr :: Parser Expr
-pNegOpExpr = symbol "-" $> UnOpExpr OpNeg <*> pFac <?> ""
-
+-- | 'pNotOpExpr' defines a parser for a `not` expression. This is only used to parse a `not` on
+-- the right-hand side of a tightly binding binary operator (e.g., `a = not b`).
 pNotOpExpr :: Parser Expr
-pNotOpExpr = reserved "not" $> UnOpExpr OpNot <*> pFac <?> ""
+pNotOpExpr = reservedOp "not" $> UnOpExpr OpNot <*> pFac <?> ""
 
 --
 -- Statements
 --
 
+-- | 'pStmt' defines a parser for a statement, either atomic or composite.
 pStmt :: Parser Stmt
 pStmt =
   pCompositeStmt <|> pAtomicStmt
     <?> "statement"
 
+-- | 'pCompositeStmt' defines a parser for a composite statement (either `if` or `while`).
 pCompositeStmt :: Parser Stmt
 pCompositeStmt = SComp <$> choice [pIf, pWhile] <?> ""
 
+-- | 'pAtomicStmt' defines a parser for an atomic statement.
 pAtomicStmt :: Parser Stmt
 pAtomicStmt =
   SAtom <$> choice [pAssign, pRead, pWrite, pWriteLn, pCall] <* semi <?> ""
@@ -273,9 +312,11 @@ pWriteLn =
     <?> "writeln"
 
 pCall :: Parser AtomicStmt
-pCall = reserved "call" *> liftA2 Call identifier pArgs <?> "call"
+pCall =
+  reserved "call" *> liftA2 Call identifier pArgs
+    <?> "call"
   where
-    pArgs = parens $ sepBy pExpr (symbol ",")
+    pArgs = parens $ commaSep pExpr
 
 pIf :: Parser CompositeStmt
 pIf =
@@ -306,9 +347,10 @@ pWhile =
 
 pRecordDef :: Parser RecordDef
 pRecordDef =
-  reserved "record" *> liftA2 RecordDef pFields identifier <* semi <?> "record definition"
+  reserved "record" *> liftA2 RecordDef pFields identifier <* semi
+    <?> "record definition"
   where
-    pFields = braces $ sepBy1 pField semi
+    pFields = braces $ semiSep1 pField
 
 pField :: Parser FieldDecl
 pField =
@@ -358,22 +400,26 @@ pProc =
 
 pProcHead :: Parser ProcHead
 pProcHead =
-  liftA2 ProcHead identifier (parens $ pProcParam `sepBy` symbol ",")
+  liftA2 ProcHead identifier (parens $ commaSep pProcParam)
     <?> "procedure header"
 
 pProcBody :: Parser ProcBody
-pProcBody = liftA2 ProcBody (many pVarDecl) (braces $ many1 pStmt) <?> "procedure body"
+pProcBody =
+  liftA2 ProcBody (many pVarDecl) (braces $ many1 pStmt)
+    <?> "procedure body"
 
 pProcParam :: Parser ProcParam
-pProcParam = liftA2 ProcParam pProcParamType identifier <?> "parameter"
+pProcParam =
+  liftA2 ProcParam pProcParamType identifier
+    <?> "parameter"
 
 pProcParamType :: Parser ProcParamType
 pProcParamType =
-  ParamBuiltinT <$> pBuiltinType <*> tryParsePassType
+  ParamBuiltinT <$> pBuiltinType <*> pPassMode
     <|> ParamAliasT <$> identifier
     <?> "parameter type"
   where
-    tryParsePassType = option PassByRef (reserved "val" $> PassByVal)
+    pPassMode = option PassByRef (reserved "val" $> PassByVal)
 
 pVarDecl :: Parser VarDecl
 pVarDecl =
@@ -382,7 +428,7 @@ pVarDecl =
       VarBuiltinT <$> pBuiltinType
         <|> VarAliasT <$> identifier
         <?> "type"
-    idents <- sepBy1 identifier $ symbol ","
+    idents <- commaSep1 identifier
     semi
     return $ VarDecl varType idents
     <?> "variable declaration"

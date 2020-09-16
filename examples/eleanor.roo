@@ -21,6 +21,7 @@ boolean other_Value';
     c <- --1;
     a <-- 1;
     a <- 2/-1;
+    # long assignment operator
     a <------ 1;
 
     bool <- true and (5 or 3 = 2 and not - never);
