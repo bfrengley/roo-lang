@@ -145,8 +145,12 @@ operatorNames =
 operatorTable :: [[Operator String Int Identity Expr]]
 operatorTable =
   [ [chainableUnaryOp "-" OpNeg],
-    [binaryOp "*" OpMul, binaryOp "/" OpDiv],
-    [binaryOp "+" OpPlus, binaryOp "-" OpMinus],
+    [ binaryOp "*" OpMul,
+      binaryOp "/" OpDiv
+    ],
+    [ binaryOp "+" OpPlus,
+      binaryOp "-" OpMinus
+    ],
     [ binaryRelOp "=" OpEq,
       binaryRelOp "!=" OpNeq,
       binaryRelOp "<" OpLess,
@@ -183,7 +187,7 @@ operatorTable =
     chainableUnaryOp name op =
       let compose = pure (.)
           pUnaryOp = reservedOp name $> UnOpExpr op
-       in Prefix $ chainl1 pUnaryOp compose
+       in Prefix $ pUnaryOp `chainl1` compose
 
 -- | 'pBuiltinType' parses one of the builtin type names, boolean or integer.
 pBuiltinType :: Parser BuiltinType
@@ -229,7 +233,6 @@ pBool :: Parser Expr
 pBool =
   reserved "true" $> ConstBool True
     <|> reserved "false" $> ConstBool False
-    <?> "boolean"
 
 -- | 'pString' defines a parser for constant strings. A string consists of a pair of double quotes
 -- surrounding any number of characters other than double quotes not preceded by a backslash, tabs,
@@ -400,6 +403,7 @@ pPosInt :: Parser Integer
 pPosInt =
   try
     ( do
+        -- natural only parses a non-negative integer
         n <- natural <?> ""
         if n > 0
           then return n
