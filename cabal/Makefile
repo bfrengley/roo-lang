@@ -4,10 +4,11 @@
 # Ben Frengley - bfrengley@student.unimelb.edu.au
 
 PROXY=proxy.unimelb.edu.au:8000
+BINPATH=.
 
 build: Roo.hs Parser.hs AST.hs PrettyPrint.hs
-	http_proxy=$(PROXY) https_proxy=$(PROXY) cabal build  && \
-	cp dist/build/Roo/Roo .
+	http_proxy=$(PROXY) https_proxy=$(PROXY) cabal build && \
+	cp "$$(find . -type f -path './dist*' -name 'Roo')" $(BINPATH)
 
 Roo: build
 	# empty rule
@@ -16,3 +17,4 @@ Roo: build
 
 clean:
 	rm $(BINPATH)/Roo
+
