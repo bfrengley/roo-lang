@@ -245,7 +245,7 @@ pString =
   ConstStr <$> enquoted pString'
     <?> "string"
   where
-    enquoted = between (char '"') (char '"')
+    enquoted = between (char '"') (symbol ['"'])
     -- parse a sequence of string-legal characters
     pString' = concat <$> many (normalChar <|> escapeSeq <?> "allowed character")
 
