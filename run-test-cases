@@ -3,9 +3,9 @@
 succeed=0
 total=0
 
-roo="$(realpath "$(dirname $0)/bin/Roo")"
-
 stack build --copy-bins --local-bin-path ./bin
+
+roo="$(realpath "$(dirname $0)/bin/Roo")"
 
 pushd "$(dirname $0)/examples" >/dev/null
 for file in *.roo; do
