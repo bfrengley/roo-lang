@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d7ee03f4cdb76a21aa8c9c0428716df305fe2379906479334364bd3d1e979d3e
+-- hash: 0e09a3dd103bc2bd44f052c1ce6b1097042a2a2e26b4e891074ab5d7c3ea42f7
 
 name:           roo-lang
 version:        0.1.0.0
@@ -22,6 +22,8 @@ extra-source-files:
 library
   exposed-modules:
       AST
+      OzAST
+      OzWriter
       Parser
       PrettyPrint
   other-modules:
