@@ -11,7 +11,6 @@
 module OzAST where
 
 import Control.Monad
-import Language.Haskell.TH
 
 -- Argument types
 
@@ -25,10 +24,12 @@ data IntegerConst
   = IntegerConst Integer
 data StringConst
   = StringConst String
+
+data Label = Label String
+
 data Program = Program [Instruction] [LabelledBlock]
   -- deriving (Eq, Show)
 
-data Label = Label String
 data LabelledBlock = LabelledBlock Label [Instruction]
 
 data Instruction
