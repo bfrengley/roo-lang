@@ -4,6 +4,21 @@ import Data.List (intercalate)
 
 import OzAST
 
+renderProgram :: Program -> String
+renderProgram (Program instrs blocks) =
+    let
+        renderInstructionLine = ("    "++) . renderInstruction
+        renderLabelledBlockLines = \(LabelledBlock (Label label) blockInstrs) ->
+                let
+                    blockLines = map renderInstructionLine blockInstrs
+                in
+                    label ++ ":" ++ "\n" ++ (intercalate "\n" blockLines)
+        lines = (map renderInstructionLine instrs)
+                ++
+                (map renderLabelledBlockLines blocks)
+    in
+        intercalate "\n" lines
+
 renderInstruction :: Instruction -> String
 
 renderInstruction (InstrPushStackFrame (Framesize fs)) = renderInstrWithArgs "push_stack_frame" [(show fs)]
