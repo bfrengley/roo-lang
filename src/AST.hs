@@ -12,8 +12,10 @@
 -- and building up to a full Roo program.
 module AST where
 
+import Text.Parsec (SourcePos)
+
 -- | 'Ident' encodes a Roo identifier.
-newtype Ident = Ident String deriving (Eq, Show)
+data Ident = Ident SourcePos String deriving (Eq, Show)
 
 -- | 'UnaryOp' encodes unary operators.
 data UnaryOp
@@ -78,27 +80,27 @@ data BinaryOp
 data Expr
   = -- | 'LVal' represents an 'LValue' expression, where an lvalue is something to which a value
     -- may be assigned.
-    LVal LValue
+    LVal SourcePos LValue
   | -- | 'ConstBool' represents a compile-time boolean constant (i.e., `true` or `false`).
-    ConstBool Bool
+    ConstBool SourcePos Bool
   | -- | 'ConstInt' represents a compile-time integer constant (e.g., `1` or `0xFF`).
-    ConstInt Integer
+    ConstInt SourcePos Integer
   | -- | 'ConstStr' represents a constant string (e.g., `"foo"`). Strings are a sequence of
     -- characters between double quotes. The following characters must be escaped in a string:
     -- `\\n`, `\\t`, and `\\"`.
-    ConstStr String
+    ConstStr SourcePos String
   | -- | 'BinOpExpr' represents an expression containing a 'BinaryOp' (of the form
     -- `expr BINOP expr`, e.g., `1 + 1`).
-    BinOpExpr BinaryOp Expr Expr
+    BinOpExpr SourcePos BinaryOp Expr Expr
   | -- | 'UnOpExpr' represents an expression containing a 'UnaryOp' (of the form `UNOP expr`, e.g.
     -- `-1`).
-    UnOpExpr UnaryOp Expr
+    UnOpExpr SourcePos UnaryOp Expr
   deriving (Eq, Show)
 
 -- | 'LValue' represents an lvalue (something to which a value may be assigned). An lvalue consists
 -- of an identifier, optionally followed by an array index expression, optionally followed by a
 -- record field access.
-data LValue = LValue Ident (Maybe Expr) (Maybe Ident)
+data LValue = LValue SourcePos Ident (Maybe Expr) (Maybe Ident)
   deriving (Eq, Show)
 
 -- | 'Stmt' represents a statement, which can be a single atomic statement or a multi-line composite
@@ -106,10 +108,10 @@ data LValue = LValue Ident (Maybe Expr) (Maybe Ident)
 data Stmt
   = -- | 'SAtom' represents an atomic statement (i.e., a statement which cannot be subdivided into
     -- smaller statements).
-    SAtom AtomicStmt
+    SAtom SourcePos AtomicStmt
   | -- | 'SComp' represents a composite statement (i.e., a statement which is made up of a number
     -- of other statements, which can themselves be atomic or composite).
-    SComp CompositeStmt
+    SComp SourcePos CompositeStmt
   deriving (Eq, Show)
 
 -- | 'AtomicStmt' represents one of the five types of atomic statement.
@@ -148,11 +150,11 @@ data BuiltinType
   deriving (Eq, Show)
 
 -- | 'FieldDecl' represents a record field declaration, consisting of a type and field name.
-data FieldDecl = FieldDecl BuiltinType Ident
+data FieldDecl = FieldDecl SourcePos BuiltinType Ident
   deriving (Eq, Show)
 
 -- | 'RecordDef' represents a record type declaration, which contains at least one field declaration.
-data RecordDef = RecordDef [FieldDecl] Ident
+data RecordDef = RecordDef SourcePos [FieldDecl] Ident
   deriving (Eq, Show)
 
 -- | 'ArrayType' represents the underlying type of an array type, which may be a builtin type or a
@@ -166,7 +168,7 @@ data ArrayType
 
 -- | 'ArrayDef' represents an array type definition. Arrays have a set (positive integer) size, an
 -- underlying type, and a name.
-data ArrayDef = ArrayDef Integer ArrayType Ident
+data ArrayDef = ArrayDef SourcePos Integer ArrayType Ident
   deriving (Eq, Show)
 
 -- | 'ProcParamPassMode' represents how a procedure parameter is passed: by reference, or by value.
@@ -188,12 +190,12 @@ data ProcParamType
   deriving (Eq, Show)
 
 -- | 'ProcParam' represents a procedure parameter, including its type and name.
-data ProcParam = ProcParam ProcParamType Ident
+data ProcParam = ProcParam SourcePos ProcParamType Ident
   deriving (Eq, Show)
 
 -- | 'ProcHead' represents a procedure header: the procedure name and its (possibly empty) list of
 -- parameters.
-data ProcHead = ProcHead Ident [ProcParam]
+data ProcHead = ProcHead SourcePos Ident [ProcParam]
   deriving (Eq, Show)
 
 -- | 'VarType' represents the type of a variable.
@@ -206,7 +208,7 @@ data VarType
 
 -- | 'VarDecl' represents a variable declaration. A declaration can include multiple different
 -- variable names, which is equivalent to declaring multiple variables of the same shared type.
-data VarDecl = VarDecl VarType [Ident]
+data VarDecl = VarDecl SourcePos VarType [Ident]
   deriving (Eq, Show)
 
 -- | 'ProcBody' represents the body of a procedure, including the (possibly empty) list of

@@ -12,7 +12,7 @@
 -- understood we prefer the applicative approach for defining parsers because it more closely
 -- mirrors the grammar it is parsing, but for more complex parsers do notation is used instead for
 -- clarity.
-module Parser (parseRooProgram) where
+module Parser where
 
 import AST
 import Control.Applicative (Applicative (liftA2), liftA3)
@@ -53,7 +53,7 @@ natural :: Parser Integer
 natural = Q.natural rooScanner
 
 identifier :: Parser Ident
-identifier = Ident <$> Q.identifier rooScanner
+identifier = withPos Ident <*> Q.identifier rooScanner
 
 semi :: Parser String
 semi = Q.semi rooScanner
@@ -93,6 +93,9 @@ semiSep = Q.semiSep rooScanner
 
 semiSep1 :: Parser a -> Parser [a]
 semiSep1 = Q.semiSep1 rooScanner
+
+withPos :: (SourcePos -> a) -> Parser a
+withPos = (<$> getPosition)
 
 reservedWords :: [String]
 reservedWords =
@@ -168,10 +171,7 @@ operatorTable =
     -- A helper function for defining infix binary operators
     defBinaryOp assoc name op =
       Infix
-        ( do
-            reservedOp name
-            return $ BinOpExpr op
-        )
+        (withPos BinOpExpr <*> (reservedOp name $> op))
         assoc
 
     -- left-associative operators
@@ -186,7 +186,7 @@ operatorTable =
     -- we only partially apply 'UnOpExpr', so we can just chain them together with `.`
     chainableUnaryOp name op =
       let compose = pure (.)
-          pUnaryOp = reservedOp name $> UnOpExpr op
+          pUnaryOp = withPos UnOpExpr <*> (reservedOp name $> op)
        in Prefix $ pUnaryOp `chainl1` compose
 
 -- | 'pBuiltinType' parses one of the builtin type names, boolean or integer.
@@ -225,14 +225,16 @@ pFac =
 -- integer, as negation is handled by unary minus.
 pNum :: Parser Expr
 pNum =
-  ConstInt <$> natural
+  withPos ConstInt <*> natural
     <?> "number"
 
 -- | 'pBool' defines a parser for constant boolean expressions, i.e., `true` and `false`.
 pBool :: Parser Expr
 pBool =
-  reserved "true" $> ConstBool True
-    <|> reserved "false" $> ConstBool False
+  withPos ConstBool
+    <*> ( reserved "true" $> True
+            <|> reserved "false" $> False
+        )
 
 -- | 'pString' defines a parser for constant strings. A string consists of a pair of double quotes
 -- surrounding any number of characters other than double quotes not preceded by a backslash, tabs,
@@ -242,7 +244,7 @@ pBool =
 -- machine. A string will thus preserve all backslashes, even if they are part of an escape sequence.
 pString :: Parser Expr
 pString =
-  ConstStr <$> enquoted pString'
+  withPos ConstStr <*> enquoted pString'
     <?> "string"
   where
     enquoted = between (char '"') (symbol ['"'])
@@ -270,7 +272,7 @@ pString =
 -- that converts it to an expression AST node.
 pLvalExpr :: Parser Expr
 pLvalExpr =
-  LVal <$> pLval
+  withPos LVal <*> pLval
 
 -- | 'pLval' defines a parser for an lvalue. An lvalue may have an index expression if the base
 -- identifier is an array type (e.g., `a[1]`), a field access if the base identifier is a record
@@ -278,17 +280,15 @@ pLvalExpr =
 -- (e.g., `a[1].b`).
 pLval :: Parser LValue
 pLval =
-  do
-    ident <- identifier
-    index <- optionMaybe (squares pExpr) <?> "index expression"
-    field <- optionMaybe (dot *> identifier) <?> "field"
-    return $ LValue ident index field
-    <?> "lvalue"
+  let pIndex = optionMaybe (squares pExpr) <?> "index expression"
+      pField = optionMaybe (dot *> identifier) <?> "field"
+   in withPos LValue <*> identifier <*> pIndex <*> pField
+        <?> "lvalue"
 
 -- | 'pNotOpExpr' defines a parser for a `not` expression. This is only used to parse a `not` on
 -- the right-hand side of a tightly binding binary operator (e.g., `a = not b`).
 pNotOpExpr :: Parser Expr
-pNotOpExpr = reservedOp "not" $> UnOpExpr OpNot <*> pFac <?> ""
+pNotOpExpr = withPos UnOpExpr <*> (reservedOp "not" $> OpNot) <*> pFac <?> ""
 
 --
 -- Statements
@@ -302,13 +302,13 @@ pStmt =
 
 -- | 'pCompositeStmt' defines a parser for a composite statement (either `if` or `while`).
 pCompositeStmt :: Parser Stmt
-pCompositeStmt = SComp <$> choice [pIf, pWhile] <?> ""
+pCompositeStmt = withPos SComp <*> choice [pIf, pWhile] <?> ""
 
 -- | 'pAtomicStmt' defines a parser for an atomic statement (assignment, `read`, `write`/`writeln`,
 -- or a procedure call).
 pAtomicStmt :: Parser Stmt
 pAtomicStmt =
-  SAtom <$> choice [pAssign, pRead, pWrite, pWriteLn, pCall] <* semi <?> ""
+  withPos SAtom <*> choice [pAssign, pRead, pWrite, pWriteLn, pCall] <* semi <?> ""
 
 -- | 'pAssign' defines a parser for an assignment statement.
 pAssign :: Parser AtomicStmt
@@ -376,7 +376,7 @@ pWhile =
 -- | 'pRecordDef' defines a parser for a record type definition.
 pRecordDef :: Parser RecordDef
 pRecordDef =
-  reserved "record" *> liftA2 RecordDef pFields identifier <* semi
+  withPos RecordDef <*> (reserved "record" *> pFields) <*> identifier <* semi
     <?> "record definition"
   where
     pFields = braces $ semiSep1 pField
@@ -385,7 +385,7 @@ pRecordDef =
 -- builtin type.
 pField :: Parser FieldDecl
 pField =
-  FieldDecl <$> pBuiltinType <*> identifier
+  withPos FieldDecl <*> pBuiltinType <*> identifier
     <?> "field declaration"
 
 --
@@ -395,7 +395,7 @@ pField =
 -- | 'pArrayDef' defines a parser for an array type definition.
 pArrayDef :: Parser ArrayDef
 pArrayDef =
-  reserved "array" *> liftA3 ArrayDef (squares pPosInt) pArrayType identifier <* semi
+  withPos ArrayDef <*> (reserved "array" *> squares pPosInt) <*> pArrayType <*> identifier <* semi
     <?> "array definition"
 
 -- | 'pPosInt' defines a parser for a positive decimal, hexadecimal, or octal integer.
@@ -433,7 +433,7 @@ pProc =
 -- list of procedure parameters).
 pProcHead :: Parser ProcHead
 pProcHead =
-  liftA2 ProcHead identifier (parens $ commaSep pProcParam)
+  withPos ProcHead <*> identifier <*> parens (commaSep pProcParam)
     <?> "procedure header"
 
 -- | 'pProcBody' defines a parser for a procedure body (local variable declarations and a series
@@ -446,7 +446,7 @@ pProcBody =
 -- | 'pProcParam' defines a parser for a procedure parameter.
 pProcParam :: Parser ProcParam
 pProcParam =
-  liftA2 ProcParam pProcParamType identifier
+  withPos ProcParam <*> pProcParamType <*> identifier
     <?> "parameter"
 
 -- | 'pProcParamType' defines a parser for the type of a procedure parameter. A procedure parameter
@@ -465,13 +465,14 @@ pProcParamType =
 pVarDecl :: Parser VarDecl
 pVarDecl =
   do
+    pos <- getPosition
     varType <-
       VarBuiltinT <$> pBuiltinType
         <|> VarAliasT <$> identifier
         <?> "type"
     idents <- commaSep1 identifier
     semi
-    return $ VarDecl varType idents
+    return $ VarDecl pos varType idents
     <?> "variable declaration"
 
 --
@@ -487,10 +488,10 @@ pProgram = liftA3 Program (many pRecordDef) (many pArrayDef) (many1 pProc)
 -- consumed. If the parsing fails, the first parse error encountered is returned; the parser does
 -- not attempt to continue on encountering an error. Should the parse succeed, the full 'Program'
 -- AST is returned.
-parseRooProgram :: String -> Either ParseError Program
+parseRooProgram :: String -> String -> Either ParseError Program
 parseRooProgram = parse' pProgram
 
 -- | 'parse'' is a convenience method for applying a parser to a complete string, discarding
 -- leading and trailing whitespace and expecting the parser to consume the rest of the string.
-parse' :: Parser p -> String -> Either ParseError p
-parse' p = runParser (whiteSpace *> p <* whiteSpace <* eof) 0 ""
+parse' :: Parser p -> String -> String -> Either ParseError p
+parse' p = runParser (whiteSpace *> p <* whiteSpace <* eof) 0

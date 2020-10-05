@@ -145,14 +145,14 @@ pPrintExpr = pPrintExpr' basePrecedence
 -- 'Expr' AST node, tracking the precedence of the parent operator and pretty printing each node
 -- appropriately based on type and the parent's precedence.
 pPrintExpr' :: Precedence -> Expr -> T.Text
-pPrintExpr' _ (LVal lv) = pPrintLval lv
-pPrintExpr' _ (ConstBool b) = T.toLower $ showT b
-pPrintExpr' _ (ConstInt n) = showT n
-pPrintExpr' _ (ConstStr s) = "\"" <> T.pack s <> "\""
-pPrintExpr' prec (UnOpExpr op expr) =
+pPrintExpr' _ (LVal _ lv) = pPrintLval lv
+pPrintExpr' _ (ConstBool _ b) = T.toLower $ showT b
+pPrintExpr' _ (ConstInt _ n) = showT n
+pPrintExpr' _ (ConstStr _ s) = "\"" <> T.pack s <> "\""
+pPrintExpr' prec (UnOpExpr _ op expr) =
   let exprStr = pPrintExpr' (unOpPrecedence op) expr
    in pPrintUnOp op <> exprStr
-pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
+pPrintExpr' prec (BinOpExpr _ op lhsExpr rhsExpr) =
   -- parenthesise determines when to add parentheses to an expression based on the precedence of
   -- the parent operator (the operator of the 'Expr' node of which the current node is the child).
   let parenthesise :: Precedence -> Precedence -> T.Text -> T.Text
@@ -184,7 +184,7 @@ pPrintExpr' prec (BinOpExpr op lhsExpr rhsExpr) =
 -- | 'pPrintLval' prints an lvalue with spaces between each of the parts removed, and the possible
 -- index expression formatted appropriately.
 pPrintLval :: LValue -> T.Text
-pPrintLval (LValue ident idx field) =
+pPrintLval (LValue _ ident idx field) =
   let showIndex i = "[" <> pPrintExpr i <> "]"
       showField f = "." <> pPrintIdent f
    in pPrintIdent ident <> maybe "" showIndex idx <> maybe "" showField field
@@ -197,8 +197,8 @@ pPrintLval (LValue ident idx field) =
 -- the statement. Atomic statements are always a list of a single item, while composite statements
 -- vary.
 pPrintStmt :: Stmt -> [T.Text]
-pPrintStmt (SAtom atom) = [pPrintAtomicStmt atom <> semi]
-pPrintStmt (SComp comp) = pPrintCompositeStmt comp
+pPrintStmt (SAtom _ atom) = [pPrintAtomicStmt atom <> semi]
+pPrintStmt (SComp _ comp) = pPrintCompositeStmt comp
 
 -- | 'pPrintAtomicStmt' prints an atomic statement with appropriate formatting depending on the
 -- type of the statement in question. It does not include the trailing semicolon.
@@ -244,9 +244,9 @@ pPrintCompositeStmt (WhileBlock expr body) =
 
 -- | 'pPrintRecord' prints a record type definition.
 pPrintRecord :: RecordDef -> [T.Text]
-pPrintRecord (RecordDef (field : fields) name) =
+pPrintRecord (RecordDef _ (field : fields) name) =
   let -- pPrintField prints a field declaration with the specified line opener
-      pPrintField open (FieldDecl t ident) = T.unwords [open, pPrintBuiltinType t, pPrintIdent ident]
+      pPrintField open (FieldDecl _ t ident) = T.unwords [open, pPrintBuiltinType t, pPrintIdent ident]
       -- start the first line with a brace
       prettyOpen = indent $ pPrintField "{" field
       -- every other line starts with a semicolon
@@ -264,7 +264,7 @@ pPrintRecord (RecordDef (field : fields) name) =
 
 -- | 'pPrintArrayDef' prints an array type definition.
 pPrintArrayDef :: ArrayDef -> T.Text
-pPrintArrayDef (ArrayDef size t name) =
+pPrintArrayDef (ArrayDef _ size t name) =
   T.unwords ["array[" <> showT size <> "]", pPrintArrayType t, pPrintIdent name] <> semi
   where
     pPrintArrayType t = case t of
@@ -281,8 +281,8 @@ pPrintProcedure (Procedure head body) = pPrintProcHead head : pPrintProcBody bod
 
 -- | 'pPrintProcHead' prints the procedure header as a single line.
 pPrintProcHead :: ProcHead -> T.Text
-pPrintProcHead (ProcHead name params) =
-  let pPrintParam (ProcParam t ident) = T.unwords [pPrintParamType t, pPrintIdent ident]
+pPrintProcHead (ProcHead _ name params) =
+  let pPrintParam (ProcParam _ t ident) = T.unwords [pPrintParamType t, pPrintIdent ident]
       paramList = commaSep pPrintParam params
    in T.unwords ["procedure", pPrintIdent name, "(" <> paramList <> ")"]
 
@@ -307,7 +307,7 @@ pPrintProcBody (ProcBody vars body) =
 -- declarations (i.e., all variables which were declared in the same declaration in the source
 -- will be declared in the same declaration in the pretty printed version).
 pPrintVarDecl :: VarDecl -> T.Text
-pPrintVarDecl (VarDecl t names) =
+pPrintVarDecl (VarDecl _ t names) =
   pPrintVarType t <> " " <> commaSep pPrintIdent names <> semi
 
 -- | 'pPrintVarType' prints a variable type name.
@@ -326,7 +326,7 @@ pPrintBuiltinType TInt = "integer"
 
 -- | 'pPrintIdent' converts an identifier to 'T.Text'.
 pPrintIdent :: Ident -> T.Text
-pPrintIdent (Ident i) = T.pack i
+pPrintIdent (Ident _ i) = T.pack i
 
 -- | 'indent' applies a single level of indentation (i.e., four leading spaces) to the given line.
 indent :: T.Text -> T.Text

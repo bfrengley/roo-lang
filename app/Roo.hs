@@ -12,6 +12,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as I
 import Parser (parseRooProgram)
 import PrettyPrint (prettyPrint)
+import SymbolTable
 import System.Environment (getArgs, getProgName)
 import System.Exit (ExitCode (..), exitWith)
 
@@ -32,12 +33,13 @@ main =
     args <- getArgs
     (file, opt) <- checkArgs progname args
     input <- readFile file
-    let output = parseRooProgram input
+    let output = parseRooProgram file input
     case output of
-      Right ast -> runWithOpts ast opt
+      Right ast -> runWithOpts input ast opt
       Left err -> do
         putStr "Parse error at "
         print err
+        exitWith (ExitFailure 2)
 
 -- | 'checkArgs' tests the arguments provided to the program against the recognised arguments.
 -- If it finds unrecognised arguments, it exits and prints a usage message.
@@ -63,16 +65,14 @@ checkArgs progname _ =
 
 -- 'runWithOpts' executes the appropriate operation on the Roo program based on the provided
 -- arguments.
-runWithOpts :: Program -> Maybe Opt -> IO ()
-runWithOpts ast (Just OPrint) = I.putStr $ prettyPrint ast
-runWithOpts ast (Just OAST) = print ast
-runWithOpts ast (Just OCompare) =
+runWithOpts :: String -> Program -> Maybe Opt -> IO ()
+runWithOpts _ ast (Just OPrint) = I.putStr $ prettyPrint ast
+runWithOpts _ ast (Just OAST) = print ast
+runWithOpts _ ast (Just OCompare) =
   if isPrintParseIdempotent ast
     then putStrLn "OK."
     else exitWith (ExitFailure 2)
-runWithOpts ast _ = do
-  putStrLn "Target code not yet implemented"
-  exitWith (ExitFailure 1)
+runWithOpts source ast Nothing = printSymbolTableErrors source ast
 
 -- | 'isPrintParseIdempotent' checks if pretty printing a program retains the same parse by
 -- comparing the pretty printed program to the result of parsing the pretty printed output and
@@ -81,5 +81,5 @@ runWithOpts ast _ = do
 isPrintParseIdempotent :: Program -> Bool
 isPrintParseIdempotent ast =
   let firstPrint = return $ prettyPrint ast
-      secondPrint = prettyPrint <$> (firstPrint >>= parseRooProgram . T.unpack)
+      secondPrint = prettyPrint <$> (firstPrint >>= (parseRooProgram "") . T.unpack)
    in firstPrint == secondPrint
