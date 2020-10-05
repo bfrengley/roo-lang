@@ -22,9 +22,7 @@ module PrettyPrint where
 
 import AST
 import Data.List (intercalate)
-import Data.Maybe (maybe)
 import qualified Data.Text as T
-import qualified Data.Text.IO as I
 
 -- | 'prettyPrint' converts a Roo program into a consistently formatted string.
 prettyPrint :: Program -> T.Text
