@@ -32,7 +32,7 @@ data LocalSymbol
   = LocalSymbol SourcePos Ident LocalType
   deriving (Show, Eq)
 
-type SymbolState a = State [InvalidSymbol] a
+type SymbolState a = State [SymbolError] a
 
 type LocalSymbolTable = Map String LocalSymbol
 
@@ -41,7 +41,7 @@ data SymbolTable = SymbolTable
     env :: LocalSymbolTable
   }
 
-data InvalidSymbol
+data SymbolError
   = Redefinition Ident Ident
   | Unknown Ident
   | InvalidArrayType Ident
@@ -56,27 +56,28 @@ printSymbolTableErrors source prog =
       sourceLines = lines source
    in mapM_ (putStrLn . writeError sourceLines) $ reverse errs
 
-buildGlobalSymbols :: Program -> (GlobalSymbolTable, [InvalidSymbol])
+buildGlobalSymbols :: Program -> (GlobalSymbolTable, [SymbolError])
 buildGlobalSymbols (Program recs arrs procs) =
-  let table =
-        foldM buildRecordSymbol Map.empty recs
-          >>= flip (foldM buildArraySymbol) arrs
-          >>= flip (foldM buildProcSymbol) procs
-   in runState table []
+  let addSymbols addSymbol defs = flip (foldM addSymbol) defs
+      populateTable =
+        addSymbols addRecordSymbol recs
+          >=> addSymbols addArraySymbol arrs
+          >=> addSymbols addProcSymbol procs
+   in runState (populateTable Map.empty) []
 
 insertGlobalSymbol :: GlobalSymbolTable -> GlobalSymbol -> SymbolState GlobalSymbolTable
 insertGlobalSymbol table sym =
   let ident = getIdent sym
       name = getName ident
    in case Map.lookup name table of
-        Just prev -> modify (Redefinition ident (getIdent prev) :) >> return table
+        Just prev -> addError (Redefinition ident (getIdent prev)) >> return table
         Nothing -> return $ Map.insert name sym table
 
-buildProcSymbol :: GlobalSymbolTable -> Procedure -> SymbolState GlobalSymbolTable
-buildProcSymbol table (Procedure head _) = insertGlobalSymbol table $ ProcS head
+addProcSymbol :: GlobalSymbolTable -> Procedure -> SymbolState GlobalSymbolTable
+addProcSymbol table (Procedure head _) = insertGlobalSymbol table $ ProcS head
 
-buildArraySymbol :: GlobalSymbolTable -> ArrayDef -> SymbolState GlobalSymbolTable
-buildArraySymbol table (ArrayDef _ _ t ident) =
+addArraySymbol :: GlobalSymbolTable -> ArrayDef -> SymbolState GlobalSymbolTable
+addArraySymbol table (ArrayDef _ _ t ident) =
   let sym = ArrayS ident t
    in checkArrayType table t >> insertGlobalSymbol table sym
 
@@ -85,12 +86,12 @@ checkArrayType table (ArrAliasT typeId) =
   let typename = getName typeId
    in case Map.lookup typename table of
         Nothing -> modify (Unknown typeId :)
-        Just (ArrayS _ _) -> modify (InvalidArrayType typeId :)
+        Just (ArrayS _ _) -> addError (InvalidArrayType typeId)
         _ -> return ()
 checkArrayType _ _ = return ()
 
-buildRecordSymbol :: GlobalSymbolTable -> RecordDef -> SymbolState GlobalSymbolTable
-buildRecordSymbol table (RecordDef _ fields ident) =
+addRecordSymbol :: GlobalSymbolTable -> RecordDef -> SymbolState GlobalSymbolTable
+addRecordSymbol table (RecordDef _ fields ident) =
   buildRecordNS fields >>= insertGlobalSymbol table . RecordS ident
 
 buildRecordNS :: [FieldDecl] -> SymbolState FieldNS
@@ -100,7 +101,7 @@ updateFieldNS :: FieldNS -> FieldDecl -> SymbolState FieldNS
 updateFieldNS ns (FieldDecl _ _ ident) =
   let name = getName ident
    in case Map.lookup name ns of
-        Just ident' -> modify (Redefinition ident ident' :) >> return ns
+        Just ident' -> addError (Redefinition ident ident') >> return ns
         Nothing -> return $ Map.insert name ident ns
 
 getIdent :: GlobalSymbol -> Ident
@@ -108,7 +109,10 @@ getIdent (RecordS ident _) = ident
 getIdent (ArrayS ident _) = ident
 getIdent (ProcS (ProcHead _ ident _)) = ident
 
-writeError :: [String] -> InvalidSymbol -> String
+addError :: SymbolError -> SymbolState ()
+addError err = modify (err :)
+
+writeError :: [String] -> SymbolError -> String
 writeError source (Redefinition (Ident pos name) (Ident pos' _)) =
   unlines
     [ writePos pos ++ ": `" ++ name ++ "` redefined (previously defined at " ++ writePos pos' ++ ")",
