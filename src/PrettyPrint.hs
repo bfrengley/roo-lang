@@ -148,8 +148,10 @@ pPrintExpr' _ (ConstBool _ b) = T.toLower $ showT b
 pPrintExpr' _ (ConstInt _ n) = showT n
 pPrintExpr' _ (ConstStr _ s) = "\"" <> T.pack s <> "\""
 pPrintExpr' prec (UnOpExpr _ op expr) =
-  let exprStr = pPrintExpr' (unOpPrecedence op) expr
-   in pPrintUnOp op <> exprStr
+  let opPrec = unOpPrecedence op
+      subExprStr = pPrintExpr' opPrec expr
+      exprStr = pPrintUnOp op <> subExprStr
+   in if prec > opPrec then "(" <> exprStr <> ")" else exprStr
 pPrintExpr' prec (BinOpExpr _ op lhsExpr rhsExpr) =
   -- parenthesise determines when to add parentheses to an expression based on the precedence of
   -- the parent operator (the operator of the 'Expr' node of which the current node is the child).
