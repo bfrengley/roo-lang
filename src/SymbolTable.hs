@@ -35,16 +35,12 @@ data LocalSymbol
 
 type SymbolState a = State [SymbolError] a
 
-data SymbolTable = SymbolTable
-  { aliases :: TypeAliasNS,
-    procs :: ProcNS,
-    env :: VarNS
-  }
+data SymbolTable = SymbolTable TypeAliasNS ProcNS VarNS
 
 data SymbolError
   = Redefinition Ident Ident
   | Unknown Ident
-  | InvalidArrayType Ident
+  | InvalidArrayType Ident Ident
   | MissingMain
   deriving (Show)
 
@@ -52,22 +48,51 @@ getName :: Ident -> String
 getName (Ident _ name) = name
 
 printSymbolTableErrors :: String -> Program -> IO ()
-printSymbolTableErrors source prog =
-  let (_, errs) = runState (buildGlobalSymbolTable prog) []
+printSymbolTableErrors source prog@(Program _ _ procs) =
+  let (_, errs) = runState (buildGlobalSymbolTable prog >>= flip (foldM buildLocalSymbolTable) procs) []
       sourceLines = lines source
    in mapM_ (putStrLn . writeError sourceLines) $ reverse errs
 
-buildLocalSymbolTable :: Procedure -> SymbolTable -> SymbolState SymbolTable
-buildLocalSymbolTable pro table = return table
+buildLocalSymbolTable :: SymbolTable -> Procedure -> SymbolState SymbolTable
+buildLocalSymbolTable
+  (SymbolTable typeNS procNS _)
+  (Procedure (ProcHead _ _ params) (ProcBody vars _)) =
+    let makeVarNS =
+          addSymbols (addParamSymbol typeNS) params >=> addSymbols (addLocalVarSymbols typeNS) vars
+     in SymbolTable typeNS procNS <$> makeVarNS Map.empty
 
--- addParam :: TypeAliasNS -> VarNS -> ProcParam -> SymbolState VarNS
--- addParam types ns param =
+addParamSymbol :: TypeAliasNS -> VarNS -> ProcParam -> SymbolState VarNS
+addParamSymbol typeNS varNS (ProcParam _ t ident) = do
+  localT <- getParamType typeNS t
+  insertSymbol varNS (LocalSymbol ident localT)
+
+getParamType :: TypeAliasNS -> ProcParamType -> SymbolState LocalType
+getParamType _ (ParamBuiltinT t pass) = return $ BuiltinT t pass
+getParamType typeNS (ParamAliasT ident) = toAliasType typeNS ident
+
+addLocalVarSymbols :: TypeAliasNS -> VarNS -> VarDecl -> SymbolState VarNS
+addLocalVarSymbols typeNS varNS (VarDecl _ t idents) =
+  do
+    localT <- getLocalVarType typeNS t
+    let insertVar ns ident = insertSymbol ns $ LocalSymbol ident localT
+    foldM insertVar varNS idents
+
+getLocalVarType :: TypeAliasNS -> VarType -> SymbolState LocalType
+getLocalVarType _ (VarBuiltinT t) = return $ BuiltinT t PassByVal
+getLocalVarType typeNS (VarAliasT ident) = toAliasType typeNS ident
+
+toAliasType :: TypeAliasNS -> Ident -> SymbolState LocalType
+toAliasType typeNS ident =
+  let name = getName ident
+   in if Map.member name typeNS
+        then return $ AliasT name
+        else addError (Unknown ident) >> return UnknownT
 
 buildGlobalSymbolTable :: Program -> SymbolState SymbolTable
 buildGlobalSymbolTable (Program recs arrs procs) = do
   aliasNS <- buildTypeAliasNS recs arrs
   procNS <- buildProcNS procs
-  return $ SymbolTable {aliases = aliasNS, procs = procNS, env = Map.empty}
+  return $ SymbolTable aliasNS procNS Map.empty
 
 buildProcNS :: [Procedure] -> SymbolState ProcNS
 buildProcNS procs = do
@@ -75,10 +100,12 @@ buildProcNS procs = do
   when (Map.notMember "main" ns) $ addError MissingMain
   return ns
 
+addSymbols :: (Foldable t, Monad m) => (b -> a -> m b) -> t a -> b -> m b
+addSymbols addSymbol = flip (foldM addSymbol)
+
 buildTypeAliasNS :: [RecordDef] -> [ArrayDef] -> SymbolState TypeAliasNS
 buildTypeAliasNS recs arrs =
-  let addSymbols addSymbol defs = flip (foldM addSymbol) defs
-   in addSymbols addRecordSymbol recs Map.empty >>= addSymbols addArraySymbol arrs
+  addSymbols addRecordSymbol recs >=> addSymbols addArraySymbol arrs $ Map.empty
 
 insertSymbol :: HasIdent b => Map String b -> b -> SymbolState (Map String b)
 insertSymbol table sym =
@@ -101,7 +128,7 @@ checkArrayType table (ArrAliasT typeId) =
   let typename = getName typeId
    in case Map.lookup typename table of
         Nothing -> modify (Unknown typeId :)
-        Just (ArrayT _ _) -> addError (InvalidArrayType typeId)
+        Just (ArrayT arrTypeId _) -> addError (InvalidArrayType typeId arrTypeId)
         _ -> return ()
 checkArrayType _ _ = return ()
 
@@ -126,27 +153,34 @@ instance HasIdent TypeAlias where
 instance HasIdent ProcHead where
   getIdent (ProcHead _ ident _) = ident
 
+instance HasIdent LocalSymbol where
+  getIdent (LocalSymbol ident _) = ident
+
 addError :: SymbolError -> SymbolState ()
 addError err = modify (err :)
 
 writeError :: [String] -> SymbolError -> String
 writeError source (Redefinition (Ident pos name) (Ident pos' _)) =
   unlines
-    [ writePos pos ++ ": `" ++ name ++ "` redefined (previously defined at " ++ writePos pos' ++ ")",
-      writeContext source pos
+    [ writePos pos ++ ": error: `" ++ name ++ "` redefined",
+      writeContext source pos,
+      writePos pos' ++ ": note: previously defined here",
+      writeContext source pos'
     ]
 writeError source (Unknown (Ident pos name)) =
   unlines
-    [ writePos pos ++ ": unknown type `" ++ name ++ "`",
+    [ writePos pos ++ ": error: unknown type `" ++ name ++ "`",
       writeContext source pos
     ]
-writeError source (InvalidArrayType (Ident pos name)) =
+writeError source (InvalidArrayType (Ident pos name) (Ident pos' _)) =
   unlines
-    [ writePos pos ++ ": invalid underlying type `" ++ name ++ "` for an array type",
-      writeContext source pos
+    [ writePos pos ++ ": error: invalid underlying type `" ++ name ++ "` for an array type",
+      writeContext source pos,
+      writePos pos' ++ ": note: type defined here",
+      writeContext source pos'
     ]
 writeError _ MissingMain =
-  "no `main` procedure found" -- position at end of source
+  unlines ["error: no `main` procedure found"] -- position at end of source
 
 writeContext :: [String] -> SourcePos -> String
 writeContext source pos =

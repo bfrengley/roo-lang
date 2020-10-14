@@ -1,0 +1,20 @@
+record
+  { integer x
+  ; boolean x
+  } record_t;
+record
+  { integer a
+  ; boolean b
+  } record_t;
+array[10] record_t record_t;
+array[10] unknown_t array_t;
+array[10] boolean array_t;
+array[10] boolean correct_t;
+array[10] correct_t array_array_t;
+
+procedure foo(integer val x, unknown_t y, record_t z)
+  correct_t a, b, b, c, x;
+  integer bar;
+{
+  writeln "test";
+}
