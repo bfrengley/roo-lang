@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 55cbb11da17be8ed448d7d81899db566fb6e76c8211d3ad01082e288ae8fa958
+-- hash: 351892145245ae987f1d17f9758393aa097dfa20af4faeb9534f850df3a96c4c
 
 name:           roo-lang
 version:        0.1.0.0
@@ -23,10 +23,12 @@ library
   exposed-modules:
       Analyse
       AST
+      CodeGen
       OzAST
       OzWriter
       Parser
       PrettyPrint
+      Semantics
       SymbolTable
   other-modules:
       Paths_roo_lang

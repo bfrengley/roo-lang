@@ -81,5 +81,5 @@ runWithOpts source ast Nothing = printSymbolTableErrors source ast
 isPrintParseIdempotent :: Program -> Bool
 isPrintParseIdempotent ast =
   let firstPrint = return $ prettyPrint ast
-      secondPrint = prettyPrint <$> (firstPrint >>= (parseRooProgram "") . T.unpack)
+      secondPrint = prettyPrint <$> (firstPrint >>= parseRooProgram "" . T.unpack)
    in firstPrint == secondPrint
