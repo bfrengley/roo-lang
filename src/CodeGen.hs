@@ -1,6 +1,8 @@
 module CodeGen where
 
 import AST
+import Analyse
+import Control.Monad (zipWithM_)
 import Control.Monad.State (runState)
 import qualified OzAST as Oz
 import Semantics (SemanticError)
@@ -11,14 +13,19 @@ programEntry = Oz.Program [Oz.InstrCall (Oz.Label "proc_main"), Oz.InstrHalt]
 
 generateCode :: Program -> Either [SemanticError] Oz.Program
 generateCode prog@(Program _ _ procs) =
-  let tables =
+  let genTables =
         ( do
             globalTable <- buildGlobalSymbolTable prog
-            mapM (buildLocalSymbolTable globalTable) procs
+            localTables <- mapM (buildLocalSymbolTable globalTable) procs
+            -- analyse every procedure to record any errors
+            zipWithM_ analyseProcedure localTables procs
+            return localTables
         )
-   in case runState tables [] of
+   in case runState genTables [] of
+        -- no errors; generate code
         (tables, []) -> Right $ programEntry $ zipWith genProcCode tables procs
-        (_, errs) -> Left errs
+        -- if we have errors, don't bother generating any code
+        (_, errs) -> Left $ reverse errs
 
 genProcCode :: SymbolTable -> Procedure -> Oz.LabelledBlock
 genProcCode _ _ = Oz.LabelledBlock (Oz.Label "") []

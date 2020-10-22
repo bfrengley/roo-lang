@@ -17,4 +17,5 @@ procedure foo(integer val x, unknown_t y, record_t z)
   integer bar;
 {
   writeln "test";
+  a <- 1 and 3 < false;
 }

@@ -1,31 +1,29 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module SymbolTable where
 
 import AST
 import Control.Monad.State
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Text (Text)
+import qualified Data.Text as T
 import Semantics
 
 class HasIdent a where
   getIdent :: a -> Ident
 
-type TypeAliasNS = Map String TypeAlias
+type TypeAliasNS = Map Text TypeAlias
 
-type FieldNS = Map String FieldDecl
+type FieldNS = Map Text FieldDecl
 
-type ProcNS = Map String ProcHead
+type ProcNS = Map Text ProcHead
 
-type VarNS = Map String LocalSymbol
+type VarNS = Map Text LocalSymbol
 
 data TypeAlias
   = ArrayT Ident ArrayType
   | RecordT Ident FieldNS
-  deriving (Show, Eq)
-
-data LocalType
-  = AliasT String
-  | BuiltinT BuiltinType ProcParamPassMode
-  | UnknownT
   deriving (Show, Eq)
 
 data LocalSymbol
@@ -34,14 +32,23 @@ data LocalSymbol
 
 data SymbolTable = SymbolTable TypeAliasNS ProcNS VarNS
 
-getName :: Ident -> String
-getName (Ident _ name) = name
+lookupVar :: SymbolTable -> Text -> Maybe LocalSymbol
+lookupVar (SymbolTable _ _ locals) = flip Map.lookup locals
+
+lookupProcedure :: SymbolTable -> Text -> Maybe ProcHead
+lookupProcedure (SymbolTable _ procs _) = flip Map.lookup procs
+
+lookupType :: SymbolTable -> Text -> Maybe TypeAlias
+lookupType (SymbolTable types _ _) = flip Map.lookup types
+
+getName :: Ident -> Text
+getName (Ident _ name) = T.pack name
 
 printSymbolTableErrors :: String -> Program -> IO ()
 printSymbolTableErrors source prog@(Program _ _ procs) =
   let (_, errs) = runState (buildGlobalSymbolTable prog >>= flip (foldM buildLocalSymbolTable) procs) []
       sourceLines = lines source
-   in mapM_ (putStrLn . writeError sourceLines) $ reverse errs
+   in mapM_ (putStrLn . T.unpack . writeError sourceLines) $ reverse errs
 
 buildLocalSymbolTable :: SymbolTable -> Procedure -> SemanticState SymbolTable
 buildLocalSymbolTable
@@ -49,7 +56,7 @@ buildLocalSymbolTable
   (Procedure (ProcHead _ _ params) (ProcBody vars _)) =
     let makeVarNS =
           addSymbols (addParamSymbol typeNS) params >=> addSymbols (addLocalVarSymbols typeNS) vars
-     in SymbolTable typeNS procNS <$> makeVarNS Map.empty
+     in (SymbolTable typeNS procNS <$> makeVarNS Map.empty)
 
 addParamSymbol :: TypeAliasNS -> VarNS -> ProcParam -> SemanticState VarNS
 addParamSymbol typeNS varNS (ProcParam _ t ident) = do
@@ -58,7 +65,7 @@ addParamSymbol typeNS varNS (ProcParam _ t ident) = do
 
 getParamType :: TypeAliasNS -> ProcParamType -> SemanticState LocalType
 getParamType _ (ParamBuiltinT t pass) = return $ BuiltinT t pass
-getParamType typeNS (ParamAliasT ident) = toAliasType typeNS ident
+getParamType typeNS (ParamAliasT ident) = toAliasType typeNS ident PassByRef
 
 addLocalVarSymbols :: TypeAliasNS -> VarNS -> VarDecl -> SemanticState VarNS
 addLocalVarSymbols typeNS varNS (VarDecl _ t idents) =
@@ -69,13 +76,13 @@ addLocalVarSymbols typeNS varNS (VarDecl _ t idents) =
 
 getLocalVarType :: TypeAliasNS -> VarType -> SemanticState LocalType
 getLocalVarType _ (VarBuiltinT t) = return $ BuiltinT t PassByVal
-getLocalVarType typeNS (VarAliasT ident) = toAliasType typeNS ident
+getLocalVarType typeNS (VarAliasT ident) = toAliasType typeNS ident PassByVal
 
-toAliasType :: TypeAliasNS -> Ident -> SemanticState LocalType
-toAliasType typeNS ident =
+toAliasType :: TypeAliasNS -> Ident -> ProcParamPassMode -> SemanticState LocalType
+toAliasType typeNS ident mode =
   let name = getName ident
    in if Map.member name typeNS
-        then return $ AliasT name
+        then return $ AliasT name mode
         else addError (Unknown ident) >> return UnknownT
 
 buildGlobalSymbolTable :: Program -> SemanticState SymbolTable
@@ -97,7 +104,7 @@ buildTypeAliasNS :: [RecordDef] -> [ArrayDef] -> SemanticState TypeAliasNS
 buildTypeAliasNS recs arrs =
   addSymbols addRecordSymbol recs >=> addSymbols addArraySymbol arrs $ Map.empty
 
-insertSymbol :: HasIdent b => Map String b -> b -> SemanticState (Map String b)
+insertSymbol :: HasIdent b => Map Text b -> b -> SemanticState (Map Text b)
 insertSymbol table sym =
   let ident = getIdent sym
       name = getName ident

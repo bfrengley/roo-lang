@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 351892145245ae987f1d17f9758393aa097dfa20af4faeb9534f850df3a96c4c
+-- hash: 721a73042cb316cc4a65b9332c2bd37259219e2987772062ba034110ef5f8a5e
 
 name:           roo-lang
 version:        0.1.0.0
@@ -30,6 +30,7 @@ library
       PrettyPrint
       Semantics
       SymbolTable
+      Util
   other-modules:
       Paths_roo_lang
   hs-source-dirs:

@@ -8,11 +8,13 @@
 module Main where
 
 import AST (Program)
+import CodeGen (generateCode)
 import qualified Data.Text as T
 import qualified Data.Text.IO as I
+import OzWriter (writeProgram)
 import Parser (parseRooProgram)
 import PrettyPrint (prettyPrint)
-import SymbolTable
+import Semantics (writeError)
 import System.Environment (getArgs, getProgName)
 import System.Exit (ExitCode (..), exitWith)
 
@@ -72,7 +74,9 @@ runWithOpts _ ast (Just OCompare) =
   if isPrintParseIdempotent ast
     then putStrLn "OK."
     else exitWith (ExitFailure 2)
-runWithOpts source ast Nothing = printSymbolTableErrors source ast
+runWithOpts source ast Nothing = case generateCode ast of
+  Left errors -> mapM_ (putStrLn . T.unpack . writeError (lines source)) errors
+  Right prog -> putStrLn . T.unpack $ writeProgram prog
 
 -- | 'isPrintParseIdempotent' checks if pretty printing a program retains the same parse by
 -- comparing the pretty printed program to the result of parsing the pretty printed output and

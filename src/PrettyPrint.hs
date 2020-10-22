@@ -116,19 +116,19 @@ unOpPrecedence OpNot = 9
 unOpPrecedence OpNeg = 21
 
 -- | 'pPrintBinOp' prints a binary operator with appropriate spaces.
-pPrintBinOp :: BinaryOp -> T.Text
-pPrintBinOp OpOr = " or "
-pPrintBinOp OpAnd = " and "
-pPrintBinOp OpEq = " = "
-pPrintBinOp OpNeq = " != "
-pPrintBinOp OpLess = " < "
-pPrintBinOp OpLessEq = " <= "
-pPrintBinOp OpGreater = " > "
-pPrintBinOp OpGreaterEq = " >= "
-pPrintBinOp OpPlus = " + "
-pPrintBinOp OpMinus = " - "
-pPrintBinOp OpMul = " * "
-pPrintBinOp OpDiv = " / "
+printBinOp :: BinaryOp -> T.Text
+printBinOp OpOr = "or"
+printBinOp OpAnd = "and"
+printBinOp OpEq = "="
+printBinOp OpNeq = "!="
+printBinOp OpLess = "<"
+printBinOp OpLessEq = "<="
+printBinOp OpGreater = ">"
+printBinOp OpGreaterEq = ">="
+printBinOp OpPlus = "+"
+printBinOp OpMinus = "-"
+printBinOp OpMul = "*"
+printBinOp OpDiv = "/"
 
 -- | 'pPrintUnOp' prints a unary operator with appropriate spaces.
 pPrintUnOp :: UnaryOp -> T.Text
@@ -179,7 +179,7 @@ pPrintExpr' prec (BinOpExpr _ op lhsExpr rhsExpr) =
         -- minus is similar: 1 - 1 + 1 != 1 - (1 + 1)
         OpMinus -> pPrintExpr' rhsMinusPrecedence rhsExpr
         _ -> pPrintChild rhsExpr
-   in parenthesise prec opPrec $ left <> pPrintBinOp op <> right
+   in parenthesise prec opPrec $ T.unwords [left, printBinOp op, right]
 
 -- | 'pPrintLval' prints an lvalue with spaces between each of the parts removed, and the possible
 -- index expression formatted appropriately.
