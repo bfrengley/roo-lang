@@ -1,3 +1,6 @@
 *.o
 oz
 
+loz.c
+poz.c
+poz.h
