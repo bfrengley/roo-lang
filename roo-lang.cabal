@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 721a73042cb316cc4a65b9332c2bd37259219e2987772062ba034110ef5f8a5e
+-- hash: 91a8143b660e163639f9ac14c920c25db8f704f97635b23e1518628d60c8c6dd
 
 name:           roo-lang
 version:        0.1.0.0
@@ -21,7 +21,7 @@ extra-source-files:
 
 library
   exposed-modules:
-      Analyse
+      Analysis
       AST
       CodeGen
       OzAST

@@ -7,16 +7,18 @@
 -- This module defines the Roo compiler entrypoint.
 module Main where
 
-import AST (Program)
-import CodeGen (generateCode)
 import qualified Data.Text as T
 import qualified Data.Text.IO as I
+import System.Environment (getArgs, getProgName)
+import System.Exit (ExitCode (..), exitWith)
+
+import AST (Program)
+import Analysis (analyseProgram)
+import CodeGen (generateCode)
 import OzWriter (writeProgram)
 import Parser (parseRooProgram)
 import PrettyPrint (prettyPrint)
 import Semantics (writeError)
-import System.Environment (getArgs, getProgName)
-import System.Exit (ExitCode (..), exitWith)
 
 -- | 'Opt' represents the command-line flags recognised by the compiler.
 data Opt
@@ -54,14 +56,20 @@ main =
                 else exitWith (ExitFailure 2)
             Nothing ->
               -- Treat the default option/behaviour as compilation
-              -- Try and compile the parsed AST
-              case (generateCode ast) of
-                -- Success - can proceed with a final Oz program
-                Right prog ->
-                  -- Output a formatted/textual representation of the Oz program to stdout
-                  putStrLn . T.unpack $ writeProgram prog
+
+              -- Perform semantic analysis
+              case (analyseProgram ast) of
+                Right tables ->
+                  -- no errors; generate code
+                  let compiledProgram = generateCode ast tables
+                  in
+                    -- Output a formatted/textual representation of the Oz program to stdout
+                    putStrLn . T.unpack $ writeProgram compiledProgram
                 Left errors ->
+                  -- semantic errors found, print them out
                   mapM_ (putStrLn . T.unpack . writeError (lines inputRooSource)) errors
+
+
         -- Parse error
         Left err -> do
           putStr "Parse error at "
