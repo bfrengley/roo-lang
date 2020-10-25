@@ -3,7 +3,7 @@
 module SymbolTable where
 
 import AST
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Text (Text)
@@ -44,12 +44,6 @@ lookupType (SymbolTable types _ _) = flip Map.lookup types
 getName :: Ident -> Text
 getName (Ident _ name) = T.pack name
 
-printSymbolTableErrors :: String -> Program -> IO ()
-printSymbolTableErrors source prog@(Program _ _ procs) =
-  let (_, errs) = runState (buildGlobalSymbolTable prog >>= flip (foldM buildLocalSymbolTable) procs) []
-      sourceLines = lines source
-   in mapM_ (putStrLn . T.unpack . writeError sourceLines) $ reverse errs
-
 buildLocalSymbolTable :: SymbolTable -> Procedure -> SemanticState SymbolTable
 buildLocalSymbolTable
   (SymbolTable typeNS procNS _)
@@ -83,7 +77,7 @@ toAliasType typeNS ident mode =
   let name = getName ident
    in if Map.member name typeNS
         then return $ AliasT name mode
-        else addError (Unknown ident) >> return UnknownT
+        else addError (UnknownType ident) >> return UnknownT
 
 buildGlobalSymbolTable :: Program -> SemanticState SymbolTable
 buildGlobalSymbolTable (Program recs arrs procs) = do
@@ -124,7 +118,7 @@ checkArrayType :: TypeAliasNS -> ArrayType -> SemanticState ()
 checkArrayType table (ArrAliasT typeId) =
   let typename = getName typeId
    in case Map.lookup typename table of
-        Nothing -> modify (Unknown typeId :)
+        Nothing -> modify (UnknownType typeId :)
         Just (ArrayT arrTypeId _) -> addError (InvalidArrayType typeId arrTypeId)
         _ -> return ()
 checkArrayType _ _ = return ()

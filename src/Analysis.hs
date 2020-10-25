@@ -45,17 +45,31 @@ evaluateExprType :: SymbolTable -> Expr -> SemanticState LocalType
 evaluateExprType _ (ConstInt _ _) = return intT
 evaluateExprType _ (ConstBool _ _) = return boolT
 evaluateExprType _ (ConstStr _ _) = return StringT
-evaluateExprType table (UnOpExpr _ op expr) =
+evaluateExprType table (UnOpExpr _ op expr) = do
   evaluateExprType table expr =>> expectUnOpType op (getPos expr)
+  return $ unOpReturnType op
 evaluateExprType table (BinOpExpr pos op left right) = do
   leftT <- evaluateExprType table left =>> expectBinOpType op (getPos left)
   rightT <- evaluateExprType table right =>> expectBinOpType op (getPos right)
   unless (leftT =%= rightT) $ addError $ BinaryTypeMismatch pos op leftT rightT
-  return leftT -- this doesn't work if the left type is an invalid type
+  return $ binOpReturnType op
 evaluateExprType table (LVal _ lval) = evaluateLvalType table lval
 
 evaluateLvalType :: SymbolTable -> LValue -> SemanticState LocalType
-evaluateLvalType table (LValue pos ident index field) = return UnknownT
+evaluateLvalType table (LValue pos ident index field) = do
+  varT <- case lookupVar table $ getName ident of
+    Just (LocalSymbol _ varT') -> return varT'
+    Nothing -> addError (UnknownVar ident) >> return UnknownT
+  -- if varT is an array, check the index
+  -- otherwise, unexpected index expression for variable of non-array type
+
+  -- if current type is a
+  return varT
+
+-- evaluateIndexExpr :: SymbolTable -> Maybe Expr -> LocalType -> SemanticState LocalType
+-- evaluateIndexExpr _ Nothing t = return t
+-- evaluateIndexExpr table (Just expr) (AliasT name mode) = do
+--   exprT <- evaluateExprType table expr =>> expectType intT ()
 
 boolT :: LocalType
 boolT = BuiltinT TBool PassByVal
@@ -63,11 +77,19 @@ boolT = BuiltinT TBool PassByVal
 intT :: LocalType
 intT = BuiltinT TInt PassByVal
 
-expectType :: LocalType -> (LocalType -> LocalType -> SemanticError) -> LocalType -> SemanticState ()
+expectType ::
+  LocalType ->
+  (LocalType -> LocalType -> SemanticError) ->
+  LocalType ->
+  SemanticState ()
 expectType expected makeErr actual =
   unless (actual =%= expected) (addError $ makeErr actual expected)
 
-expectTypes :: [LocalType] -> (LocalType -> [LocalType] -> SemanticError) -> LocalType -> SemanticState ()
+expectTypes ::
+  [LocalType] ->
+  (LocalType -> [LocalType] -> SemanticError) ->
+  LocalType ->
+  SemanticState ()
 expectTypes expected makeErr actual =
   unless (any (actual =%=) expected) (addError $ makeErr actual expected)
 
@@ -75,17 +97,33 @@ expectUnOpType :: UnaryOp -> SourcePos -> LocalType -> SemanticState ()
 expectUnOpType OpNot pos = expectType boolT (InvalidUnaryType pos OpNot)
 expectUnOpType OpNeg pos = expectType intT (InvalidUnaryType pos OpNeg)
 
+unOpReturnType :: UnaryOp -> LocalType
+unOpReturnType OpNot = boolT
+unOpReturnType OpNeg = intT
+
 expectBinOpType :: BinaryOp -> SourcePos -> LocalType -> SemanticState ()
 expectBinOpType op pos t
-  -- boolean operators
-  | op `elem` [OpAnd, OpOr] = expectTypes [boolT] (InvalidBinaryType pos op) t
-  -- arithmetic operators
-  | op `elem` [OpPlus, OpMinus, OpMul, OpDiv] = expectTypes [boolT] (InvalidBinaryType pos op) t
-  -- relational operators
-  | op `elem` [OpEq, OpNeq, OpLess, OpLessEq, OpGreater, OpGreaterEq] =
-    expectTypes [boolT, intT] (InvalidBinaryType pos op) t
-  -- anything else (i.e., nothing)
+  | isBooleanOp op = expectTypes [boolT] (InvalidBinaryType pos op) t
+  | isRelOp op = expectTypes [boolT, intT] (InvalidBinaryType pos op) t
+  | isArithOp op = expectTypes [intT] (InvalidBinaryType pos op) t
+  -- anything else (i.e., never)
   | otherwise = return ()
+
+binOpReturnType :: BinaryOp -> LocalType
+binOpReturnType op
+  | isRelOp op = boolT
+  | isBooleanOp op = boolT
+  | isArithOp op = intT
+  | otherwise = UnknownT
+
+isRelOp :: BinaryOp -> Bool
+isRelOp = (`elem` [OpEq, OpNeq, OpLess, OpLessEq, OpGreater, OpGreaterEq])
+
+isBooleanOp :: BinaryOp -> Bool
+isBooleanOp = (`elem` [OpAnd, OpOr])
+
+isArithOp :: BinaryOp -> Bool
+isArithOp = (`elem` [OpPlus, OpMinus, OpMul, OpDiv])
 
 getPos :: Expr -> SourcePos
 getPos (ConstInt pos _) = pos
