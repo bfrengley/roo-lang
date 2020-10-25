@@ -2,34 +2,26 @@
 
 module Analysis where
 
+import AST
 import Control.Monad
 import Control.Monad.State.Strict (runState)
-import Text.Parsec (SourcePos)
-
-import AST
 import Semantics
-    ( (=%=),
-      addError,
-      LocalType(UnknownT, StringT, BuiltinT),
-      SemanticError(InvalidBinaryType, InvalidAssign, BinaryTypeMismatch,
-                    UnknownVar, InvalidUnaryType),
-      SemanticState )
 import SymbolTable
+import Text.Parsec (SourcePos)
 import Util ((=>>))
 
 -- Perform semantic analysis of the program and return the Symbol Tables for each procedure if there are no errors
 analyseProgram :: Program -> Either [SemanticError] [SymbolTable]
 analyseProgram prog@(Program _ _ procs) =
-  let
-    genTables = do
-      globalTable <- buildGlobalSymbolTable prog
-      localTables <- mapM (buildLocalSymbolTable globalTable) procs
-      -- analyse every procedure to record any errors
-      zipWithM_ analyseProcedure localTables procs
-      return localTables
-  in case runState genTables [] of
-    (tables, []) -> Right tables
-    (_, errs) -> Left $ reverse errs
+  let genTables = do
+        globalTable <- buildGlobalSymbolTable prog
+        localTables <- mapM (buildLocalSymbolTable globalTable) procs
+        -- analyse every procedure to record any errors
+        zipWithM_ analyseProcedure localTables procs
+        return localTables
+   in case runState genTables [] of
+        (tables, []) -> Right tables
+        (_, errs) -> Left $ reverse errs
 
 analyseProcedure :: SymbolTable -> Procedure -> SemanticState ()
 analyseProcedure table (Procedure _ (ProcBody _ stmts)) = mapM_ (analyseStmt table) stmts
