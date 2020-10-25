@@ -44,10 +44,11 @@ newtype Label = Label String deriving (Show, Eq)
 instance OzShow Label where
   ozShow (Label s) = s
 
-data Program = Program [Instruction] [LabelledBlock]
+data Program = Program [ProgramLine]
 
 -- deriving (Eq, Show)
 
+data ProgramLine = InstructionLine Instruction | LabelLine Label
 data LabelledBlock = LabelledBlock Label [Instruction]
 
 data Instruction
@@ -128,3 +129,8 @@ instance OzShow BuiltinFunction where
   ozShow BuiltinPrintInt = "print_int"
   ozShow BuiltinPrintBool = "print_bool"
   ozShow BuiltinPrintString = "print_string"
+
+boolConst :: Bool -> IntegerConst
+-- Spec says any non-zero int is 'true' - just use 1
+boolConst True = IntegerConst 1
+boolConst False = IntegerConst 0

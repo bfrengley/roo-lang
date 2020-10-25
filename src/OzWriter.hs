@@ -4,15 +4,22 @@ module OzWriter where
 
 import qualified Data.Text as T
 import OzAST
-import PrettyPrint (indentMap)
+import PrettyPrint (indent)
 
 writeProgram :: Program -> T.Text
-writeProgram (Program instrs blocks) =
-  T.unlines . concat $ indentMap writeInstruction instrs : map writeBlock blocks
+writeProgram (Program programLines) =
+  T.unlines (map writeProgramLine programLines)
 
-writeBlock :: LabelledBlock -> [T.Text]
-writeBlock (LabelledBlock label instrs) =
-  (ozShowT label <> ":") : indentMap writeInstruction instrs
+writeProgramLine :: ProgramLine -> T.Text
+writeProgramLine (InstructionLine instr) = indent $ writeInstruction instr
+writeProgramLine (LabelLine label) = writeLabel label
+  
+writeLabel :: Label -> T.Text
+writeLabel label = ozShowT label <> ":"
+
+-- writeBlock :: LabelledBlock -> [T.Text]
+-- writeBlock (LabelledBlock label instrs) =
+--   (writeLabel label) : indentMap writeInstruction instrs
 
 writeInstruction :: Instruction -> T.Text
 writeInstruction (InstrPushStackFrame fs) = writeInstrWithArgs "push_stack_frame" [fs]
