@@ -14,17 +14,17 @@ class OzShow a where
 
 -- Argument types
 
-newtype Framesize = Framesize Word deriving (Show, Eq)
+newtype Framesize = Framesize Int deriving (Show, Eq)
 
 instance OzShow Framesize where
   ozShow (Framesize w) = show w
 
-newtype StackSlot = StackSlot Word deriving (Show, Eq)
+newtype StackSlot = StackSlot Int deriving (Show, Eq)
 
 instance OzShow StackSlot where
   ozShow (StackSlot w) = show w
 
-newtype Register = Register Word deriving (Show, Eq)
+newtype Register = Register Int deriving (Show, Eq)
 
 instance OzShow Register where
   ozShow (Register w) = "r" ++ show w

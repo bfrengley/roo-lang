@@ -1,0 +1,13 @@
+procedure main ()
+{
+    call proc(42, false);
+}
+
+procedure proc (integer n, boolean b)
+{
+    writeln "Hello from Procedure";
+    write "Integer arg is: ";
+    writeln n;
+    write "Boolean arg is: ";
+    writeln b;
+}

@@ -1,10 +1,12 @@
 module CodeGen where
 
 import Control.Monad.State.Strict
+import Data.Map (size)
+import qualified Data.Text as T
 
 import qualified AST as Roo
 import qualified OzAST as Oz
-import SymbolTable (SymbolTable)
+import SymbolTable
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
 
@@ -24,9 +26,91 @@ generateCode (Roo.Program _ _ procs) procedureSymbolTables =
     (runtimeBoilerplate ++ concat (zipWith generateProcedureCode procs procedureSymbolTables))
 
 generateProcedureCode :: Roo.Procedure -> SymbolTable -> [Oz.ProgramLine]
-generateProcedureCode (Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ ident) args) (Roo.ProcBody varDecls statements)) symbolTable =
-  Oz.LabelLine (Oz.Label ident) : instrs
-  where instrs = (concat $ evalState (mapM (generateStmtCode symbolTable) statements) initialRegister) ++ [Oz.InstructionLine Oz.InstrReturn]
+generateProcedureCode procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ ident) args) (Roo.ProcBody varDecls statements)) symbolTable =
+  concat [
+    [Oz.LabelLine (Oz.Label ident)],
+    stackSetup,
+    instrs,
+    stackCleanup,
+    [Oz.InstructionLine Oz.InstrReturn]
+  ]
+  where
+    stackSize = calculateStackSize procedure symbolTable
+    instrs = (concat $ evalState (mapM (generateStmtCode symbolTable) statements) initialRegister)
+    stackSetup =
+      if (stackSize > 0) then
+        let
+          saveArgs = zipWith (\i arg -> Oz.InstructionLine $ generateArgumentStackSaveInstr (Oz.Register i) 0) [0..] args
+        in
+          [Oz.InstructionLine $ Oz.InstrPushStackFrame (Oz.Framesize stackSize)] ++ saveArgs
+      else
+        []
+    stackCleanup =
+      if (stackSize > 0) then
+        [Oz.InstructionLine $ Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
+      else
+        []
+
+calculateStackSize :: Roo.Procedure -> SymbolTable -> Int
+calculateStackSize (Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ _) args) (Roo.ProcBody varDecls _)) symbolTable =
+  sum (argSizes ++ varSizes)
+  where
+    argSizes = map (\arg -> calculateParamStackSize arg symbolTable) args
+    varSizes = map (\decl -> calculateLocalVarDeclStackSize decl symbolTable) varDecls
+
+calculateLocalVarDeclStackSize :: Roo.VarDecl -> SymbolTable -> Int
+calculateLocalVarDeclStackSize (Roo.VarDecl _ (Roo.VarBuiltinT _) varIdents) _ =
+  -- Builtin types are always of size 1
+  -- VarDecl could be declaring multiple variables so multiply by the number of identifiers
+  1 * length varIdents
+calculateLocalVarDeclStackSize (Roo.VarDecl varDeclSp (Roo.VarAliasT (Roo.Ident typeAliasIdentSp typeAliasIdent)) varIdents) symbolTable = 
+  let numberOfVars = length varIdents in
+  -- This variable declaration is of an aliased type. It will either be a record or an array.
+  -- Hit up the Symbol table for info about the type alias
+  case (lookupType symbolTable (T.pack typeAliasIdent)) of
+    Just (RecordT _ rt) ->
+      let numberOfRecordFields = size rt in
+      -- Records can only have boolean or integer types for fields... so the
+      -- stack size is just the number of fields
+      numberOfRecordFields * 1
+    Just (ArrayT _ (Roo.ArrBuiltinT a)) ->
+      -- Built-in types are always size 1, so just multiply by the array size
+      -- and the # of array declarations
+      1 * numberOfVars -- XXX: need to multiply by array size!!!
+    Just (ArrayT _ (Roo.ArrAliasT (Roo.Ident _ arrayElemTypeAliasIdent))) ->
+      -- The type of the array elements is a type alias. Arrays are only allowed to contain
+      -- elements of built-in type or record elements, so the type alias *should* just be a record
+      case (lookupType symbolTable (T.pack arrayElemTypeAliasIdent)) of
+        Just (RecordT _ rt) ->
+          let numberOfRecordFields = size rt in
+          -- Again, record size is just # of fields, so just multiply by array
+          -- size and # of array declarations
+          numberOfRecordFields * numberOfVars -- XXX: need to multiply by array size!!!
+        Just _ -> error $ "Type alias " ++ arrayElemTypeAliasIdent ++ " shouldn't be allowed to be used as an array element type?"
+        Nothing -> error $ "Type alias " ++ arrayElemTypeAliasIdent ++ " (for array type " ++ (show typeAliasIdent) ++ " at " ++ (show typeAliasIdentSp) ++ ") could not be found in symbol table for calculating stack size?"
+    Nothing -> error $ "Type alias " ++ typeAliasIdent ++ " (at " ++ (show varDeclSp) ++ ") could not be found in symbol table for calculating stack size?"
+
+calculateParamStackSize :: Roo.ProcParam -> SymbolTable -> Int
+calculateParamStackSize (Roo.ProcParam _ (Roo.ParamBuiltinT _ passMode) (Roo.Ident _ ident)) _ =
+  case passMode of
+    Roo.PassByRef ->
+      -- Size is 1 because we only need to store an address, which only takes
+      -- up one stack slot
+      1
+    Roo.PassByVal ->
+      -- arrays and records can't be passed by value in Roo, so it can be
+      -- assumed that any parameter passed by value is a builtin type that
+      -- only needs one stack slot for storage
+      1
+calculateParamStackSize (Roo.ProcParam _ (Roo.ParamAliasT typeIdent) (Roo.Ident paramIdentSp paramIdent)) symbolTable =
+  -- Values of type-aliased type must be passed by reference...
+  -- so all that's needed is one slot for the address
+  1
+
+generateArgumentStackSaveInstr :: Oz.Register -> Int -> Oz.Instruction
+generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset =
+  let stackSlot = stackOffset + registerNumber in
+  Oz.InstrStore (Oz.StackSlot stackSlot) register
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> RegisterState [Oz.ProgramLine]
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
