@@ -3,11 +3,17 @@
 module Analysis where
 
 import Control.Monad
-import Control.Monad.State (runState)
+import Control.Monad.State.Strict (runState)
 import Text.Parsec (SourcePos)
 
 import AST
 import Semantics
+    ( (=%=),
+      addError,
+      LocalType(UnknownT, StringT, BuiltinT),
+      SemanticError(InvalidBinaryType, InvalidAssign, BinaryTypeMismatch,
+                    UnknownVar, InvalidUnaryType),
+      SemanticState )
 import SymbolTable
 import Util ((=>>))
 
