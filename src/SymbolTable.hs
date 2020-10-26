@@ -60,6 +60,7 @@ instance SizedSymbol SymbolType where
         underlyingSize <- typeSize table t
         return $ length * underlyingSize
       RecordT _ fields -> return $ Map.size fields
+  typeSize _ UnknownT = Nothing
   typeSize _ _ = Just 1
 
 instance SizedSymbol NamedSymbol where
