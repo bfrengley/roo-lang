@@ -3,6 +3,7 @@ module CodeGen where
 import qualified AST as Roo
 import Control.Monad.State.Strict
 import qualified Data.Map as Map
+-- import Data.Map.Ordered
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified OzAST as Oz
@@ -13,6 +14,9 @@ data OzIOT = OzIOInt | OzIOBool | OzIOStr
 
 -- track the lowest free register
 type RegisterState a = State Oz.Register a
+
+-- type StackOrdering = OMap LocalSymbol Int
+data StackOrdering = StackOrdering [(LocalSymbol, Int)]
 
 runtimeBoilerplate :: [Oz.ProgramLine]
 runtimeBoilerplate =
@@ -28,23 +32,29 @@ generateCode (Roo.Program _ _ procs) tables =
     (runtimeBoilerplate ++ concat (zipWith generateProcedureCode tables procs))
 
 generateProcedureCode :: SymbolTable -> Roo.Procedure -> [Oz.ProgramLine]
-generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ ident) args) (Roo.ProcBody varDecls statements)) =
+generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ procName) args) (Roo.ProcBody varDecls statements)) =
   concat
-    [ [Oz.LabelLine (Oz.Label ident)],
+    [ [Oz.LabelLine (Oz.Label procName)],
       stackSetup,
       instrs,
       stackCleanup,
       [Oz.InstructionLine Oz.InstrReturn]
     ]
   where
-    -- TODO: is this safe? I think so
-    stackSize = fromMaybe 0 $ calculateStackSize symbolTable procedure
+    stackSize = case calculateStackSize symbolTable procedure of
+      Just size -> size
+      Nothing -> error $ "Stack size calculation for procedure " ++ procName ++ " failed"
     instrs = concat $ evalState (mapM (generateStmtCode symbolTable) statements) initialRegister
     stackSetup =
       if stackSize > 0
         then
           let saveArgs = zipWith (\i arg -> Oz.InstructionLine $ generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
-           in Oz.InstructionLine (Oz.InstrPushStackFrame $ Oz.Framesize stackSize) : saveArgs
+              initVars = generateVariableInitializeCodeForProc procedure (Oz.StackSlot (length args)) 0 symbolTable
+           in concat
+                [ [Oz.InstructionLine (Oz.InstrPushStackFrame $ Oz.Framesize stackSize)],
+                  saveArgs,
+                  initVars
+                ]
         else []
     stackCleanup =
       if stackSize > 0
@@ -59,8 +69,54 @@ calculateStackSize table@(SymbolTable _ _ vars) (Roo.Procedure (Roo.ProcHead _ p
 
 generateArgumentStackSaveInstr :: Oz.Register -> Int -> Oz.Instruction
 generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset =
-  let stackSlot = stackOffset + registerNumber
-   in Oz.InstrStore (Oz.StackSlot stackSlot) register
+  let stackSlotNo = stackOffset + registerNumber
+   in Oz.InstrStore (Oz.StackSlot stackSlotNo) register
+
+stackSize :: SizedSymbol s => s -> SymbolTable -> Int
+stackSize symbol symbolTable =
+  case typeSize symbolTable symbol of
+    Just s -> s
+    Nothing -> error "empty stack size???"
+
+makeStackOrdering :: Roo.Procedure -> SymbolTable -> StackOrdering
+makeStackOrdering procedure symbolTable =
+  let lVars = (localVars symbolTable)
+   in StackOrdering $ scanl (\(_, sizeSumAcc) lVar -> (lVar, (sizeSumAcc + (stackSize lVar symbolTable))) ) ((head lVars), 0) lVars
+
+generateVariableInitializeCodeForProc :: Roo.Procedure -> Oz.StackSlot -> Int -> SymbolTable -> [Oz.ProgramLine]
+generateVariableInitializeCodeForProc procedure@(Roo.Procedure (Roo.ProcHead _ procId args) (Roo.ProcBody varDecls statements)) slot@(Oz.StackSlot slotNo) registerOffset symbolTable =
+  -- let variablesWithTypes = concat $ map (\(Roo.VarDecl _ varType idents) -> map (\ident -> (varType, ident)) idents ) varDecls
+  -- TODO: this funciton should accept a StackOrdering
+  concat $
+    map
+      (\lvar -> generateVariableInitializeCode lvar slot symbolTable)
+      (localVars symbolTable)
+
+generateVariableInitializeCode :: LocalSymbol -> Oz.StackSlot -> SymbolTable -> [Oz.ProgramLine]
+generateVariableInitializeCode lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _) slot@(Oz.StackSlot slotNo) symbolTable =
+  case varType of
+    AliasT aliasName passMode ->
+      let stackSize = case typeSize symbolTable lVarSym of
+            Just s -> s
+            Nothing -> error "empty stack size???"
+        in map Oz.InstructionLine $ concat $
+            [ [Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst 0)],
+              [Oz.InstrStore (Oz.StackSlot (slotNo + i)) (Oz.Register 0) | i <- [0..(stackSize-1)]]
+            ]
+    BuiltinT builtinT passMode ->
+      let
+        initialVal = case passMode of
+          Roo.PassByVal -> case builtinT of
+            Roo.TBool -> 0
+            Roo.TInt -> 0
+          Roo.PassByRef -> error "can't have passbyref for local var??"
+      in
+        map Oz.InstructionLine
+          [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst initialVal),
+            Oz.InstrStore slot (Oz.Register 0)
+          ]
+    _ -> error ""
+-- generateVariableInitializeCode (Roo.VarDecl varDeclSp (Roo.VarAliasT (Roo.Ident typeAliasIdentSp typeAliasIdent)) varIdents) symbolTable = 
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> RegisterState [Oz.ProgramLine]
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
