@@ -15,7 +15,7 @@ class HasIdent a where
 
 data NamedSymbol = NamedSymbol Ident SymbolType deriving (Show, Eq)
 
-newtype FieldNS = FieldNS (Map Text NamedSymbol) deriving (Show, Eq)
+type FieldNS = Map Text NamedSymbol
 
 data ProcSymbol = ProcSymbol Ident [NamedSymbol] deriving (Show, Eq)
 
@@ -59,7 +59,7 @@ instance SizedSymbol SymbolType where
       ArrayT _ length t -> do
         underlyingSize <- typeSize table t
         return $ length * underlyingSize
-      RecordT _ fields -> return $ numFields fields
+      RecordT _ fields -> return $ Map.size fields
   typeSize _ _ = Just 1
 
 instance SizedSymbol NamedSymbol where
@@ -67,9 +67,6 @@ instance SizedSymbol NamedSymbol where
 
 instance SizedSymbol ProcSymbol where
   typeSize table (ProcSymbol _ params) = sum <$> mapM (typeSize table) params
-
-numFields :: FieldNS -> Int
-numFields (FieldNS fields) = Map.size fields
 
 --
 -- Symbol table generation
@@ -163,12 +160,12 @@ addRecordSymbol table (RecordDef _ fields ident) =
   buildRecordNS fields >>= addSymbol table . RecordT ident
 
 buildRecordNS :: [FieldDecl] -> SemanticState FieldNS
-buildRecordNS = foldM updateFieldNS $ FieldNS Map.empty
+buildRecordNS = foldM updateFieldNS Map.empty
 
 updateFieldNS :: FieldNS -> FieldDecl -> SemanticState FieldNS
-updateFieldNS (FieldNS ns) field@(FieldDecl _ _ ident) =
+updateFieldNS ns field@(FieldDecl _ _ ident) =
   let name = getName ident
-   in FieldNS <$> case Map.lookup name ns of
+   in case Map.lookup name ns of
         Just (NamedSymbol ident' _) -> addError (Redefinition ident ident') >> return ns
         Nothing -> return $ Map.insert name (symbolOfField field) ns
 
