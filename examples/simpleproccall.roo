@@ -4,10 +4,13 @@ procedure main ()
 }
 
 procedure proc (integer n, boolean b)
+    integer local;
 {
     writeln "Hello from Procedure";
     write "Integer arg is: ";
     writeln n;
     write "Boolean arg is: ";
     writeln b;
+    write "Local int is";
+    writeln local;
 }
