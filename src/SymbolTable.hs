@@ -181,10 +181,13 @@ symbolOfField (FieldDecl _ t ident) = NamedSymbol ident (BuiltinT t PassByVal)
 
 symbolTypeOfArrayType :: ArrayType -> SymbolType
 symbolTypeOfArrayType (ArrBuiltinT t) = BuiltinT t PassByVal
+symbolTypeOfArrayType (ArrAliasT ident) = AliasT (getName ident) PassByVal
 
 symbolOfParam :: ProcParam -> NamedSymbol
 symbolOfParam (ProcParam _ (ParamAliasT typeId) ident) =
   NamedSymbol ident $ AliasT (getName typeId) PassByRef
+symbolOfParam (ProcParam _ (ParamBuiltinT t mode) ident) =
+  NamedSymbol ident $ BuiltinT t mode
 
 instance HasIdent TypeAlias where
   getIdent (RecordT ident _) = ident

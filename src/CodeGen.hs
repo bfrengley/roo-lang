@@ -37,6 +37,7 @@ generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.
       [Oz.InstructionLine Oz.InstrReturn]
     ]
   where
+    -- TODO: is this safe? I think so
     stackSize = fromMaybe 0 $ calculateStackSize symbolTable procedure
     instrs = concat $ evalState (mapM (generateStmtCode symbolTable) statements) initialRegister
     stackSetup =
