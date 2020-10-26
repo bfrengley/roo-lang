@@ -28,7 +28,7 @@ data TypeAlias
 
 type TypeAliasNS = Map Text TypeAlias
 
-data LocalSymbolType = ParamS | LocalVarS
+data LocalSymbolType = ParamS | LocalVarS deriving (Eq)
 
 data LocalSymbol = LocalSymbol NamedSymbol LocalSymbolType
 
@@ -48,6 +48,10 @@ lookupProcedure (SymbolTable _ procs _) name = Map.lookup name procs
 
 lookupType :: SymbolTable -> Text -> Maybe TypeAlias
 lookupType (SymbolTable types _ _) = flip Map.lookup types
+
+localVars :: SymbolTable -> [LocalSymbol]
+localVars (SymbolTable _ _ locals) =
+  filter (\(LocalSymbol _ symType) -> symType == LocalVarS) $ Map.elems locals
 
 --
 -- Symbol sizes
