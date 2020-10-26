@@ -13,33 +13,67 @@ import Semantics
 class HasIdent a where
   getIdent :: a -> Ident
 
-type TypeAliasNS = Map Text TypeAlias
+data NamedSymbol = NamedSymbol Ident SymbolType deriving (Show, Eq)
 
-type FieldNS = Map Text FieldDecl
+newtype FieldNS = FieldNS (Map Text NamedSymbol) deriving (Show, Eq)
 
-type ProcNS = Map Text ProcHead
+data ProcSymbol = ProcSymbol Ident [NamedSymbol] deriving (Show, Eq)
 
-type VarNS = Map Text LocalSymbol
+type ProcNS = Map Text ProcSymbol
 
 data TypeAlias
-  = ArrayT Ident ArrayType
+  = ArrayT Ident Int SymbolType
   | RecordT Ident FieldNS
   deriving (Show, Eq)
 
-data LocalSymbol
-  = LocalSymbol Ident LocalType
-  deriving (Show, Eq)
+type TypeAliasNS = Map Text TypeAlias
+
+type VarNS = Map Text NamedSymbol
 
 data SymbolTable = SymbolTable TypeAliasNS ProcNS VarNS
 
-lookupVar :: SymbolTable -> Text -> Maybe LocalSymbol
+--
+-- Lookup
+--
+
+lookupVar :: SymbolTable -> Text -> Maybe NamedSymbol
 lookupVar (SymbolTable _ _ locals) = flip Map.lookup locals
 
-lookupProcedure :: SymbolTable -> Text -> Maybe ProcHead
-lookupProcedure (SymbolTable _ procs _) = flip Map.lookup procs
+lookupProcedure :: SymbolTable -> Text -> Maybe ProcSymbol
+lookupProcedure (SymbolTable _ procs _) name = Map.lookup name procs
 
 lookupType :: SymbolTable -> Text -> Maybe TypeAlias
 lookupType (SymbolTable types _ _) = flip Map.lookup types
+
+--
+-- Symbol sizes
+--
+
+class SizedSymbol t where
+  typeSize :: SymbolTable -> t -> Maybe Int
+
+instance SizedSymbol SymbolType where
+  typeSize table (AliasT name PassByVal) = do
+    alias <- lookupType table name
+    case alias of
+      ArrayT _ length t -> do
+        underlyingSize <- typeSize table t
+        return $ length * underlyingSize
+      RecordT _ fields -> return $ numFields fields
+  typeSize _ _ = Just 1
+
+instance SizedSymbol NamedSymbol where
+  typeSize table (NamedSymbol _ t) = typeSize table t
+
+instance SizedSymbol ProcSymbol where
+  typeSize table (ProcSymbol _ params) = sum <$> mapM (typeSize table) params
+
+numFields :: FieldNS -> Int
+numFields (FieldNS fields) = Map.size fields
+
+--
+-- Symbol table generation
+--
 
 getName :: Ident -> Text
 getName (Ident _ name) = T.pack name
@@ -55,9 +89,9 @@ buildLocalSymbolTable
 addParamSymbol :: TypeAliasNS -> VarNS -> ProcParam -> SemanticState VarNS
 addParamSymbol typeNS varNS (ProcParam _ t ident) = do
   localT <- getParamType typeNS t
-  insertSymbol varNS (LocalSymbol ident localT)
+  addSymbol varNS (NamedSymbol ident localT)
 
-getParamType :: TypeAliasNS -> ProcParamType -> SemanticState LocalType
+getParamType :: TypeAliasNS -> ProcParamType -> SemanticState SymbolType
 getParamType _ (ParamBuiltinT t pass) = return $ BuiltinT t pass
 getParamType typeNS (ParamAliasT ident) = toAliasType typeNS ident PassByRef
 
@@ -65,14 +99,14 @@ addLocalVarSymbols :: TypeAliasNS -> VarNS -> VarDecl -> SemanticState VarNS
 addLocalVarSymbols typeNS varNS (VarDecl _ t idents) =
   do
     localT <- getLocalVarType typeNS t
-    let insertVar ns ident = insertSymbol ns $ LocalSymbol ident localT
+    let insertVar ns ident = addSymbol ns $ NamedSymbol ident localT
     foldM insertVar varNS idents
 
-getLocalVarType :: TypeAliasNS -> VarType -> SemanticState LocalType
+getLocalVarType :: TypeAliasNS -> VarType -> SemanticState SymbolType
 getLocalVarType _ (VarBuiltinT t) = return $ BuiltinT t PassByVal
 getLocalVarType typeNS (VarAliasT ident) = toAliasType typeNS ident PassByVal
 
-toAliasType :: TypeAliasNS -> Ident -> ProcParamPassMode -> SemanticState LocalType
+toAliasType :: TypeAliasNS -> Ident -> ProcParamPassMode -> SemanticState SymbolType
 toAliasType typeNS ident mode =
   let name = getName ident
    in if Map.member name typeNS
@@ -98,8 +132,8 @@ buildTypeAliasNS :: [RecordDef] -> [ArrayDef] -> SemanticState TypeAliasNS
 buildTypeAliasNS recs arrs =
   addSymbols addRecordSymbol recs >=> addSymbols addArraySymbol arrs $ Map.empty
 
-insertSymbol :: HasIdent b => Map Text b -> b -> SemanticState (Map Text b)
-insertSymbol table sym =
+addSymbol :: HasIdent b => Map Text b -> b -> SemanticState (Map Text b)
+addSymbol table sym =
   let ident = getIdent sym
       name = getName ident
    in case Map.lookup name table of
@@ -107,42 +141,57 @@ insertSymbol table sym =
         Nothing -> return $ Map.insert name sym table
 
 addProc :: ProcNS -> Procedure -> SemanticState ProcNS
-addProc table (Procedure head _) = insertSymbol table head
+addProc table (Procedure (ProcHead _ ident params) _) =
+  addSymbol table . ProcSymbol ident $ map symbolOfParam params
 
 addArraySymbol :: TypeAliasNS -> ArrayDef -> SemanticState TypeAliasNS
-addArraySymbol table (ArrayDef _ _ t ident) =
-  let sym = ArrayT ident t
-   in checkArrayType table t >> insertSymbol table sym
+addArraySymbol table (ArrayDef _ size t ident) =
+  let sym = ArrayT ident (fromInteger size) $ symbolTypeOfArrayType t
+   in checkArrayType table t >> addSymbol table sym
 
 checkArrayType :: TypeAliasNS -> ArrayType -> SemanticState ()
 checkArrayType table (ArrAliasT typeId) =
   let typename = getName typeId
    in case Map.lookup typename table of
         Nothing -> modify (UnknownType typeId :)
-        Just (ArrayT arrTypeId _) -> addError (InvalidArrayType typeId arrTypeId)
+        Just (ArrayT arrTypeId _ _) -> addError (InvalidArrayType typeId arrTypeId)
         _ -> return ()
 checkArrayType _ _ = return ()
 
 addRecordSymbol :: TypeAliasNS -> RecordDef -> SemanticState TypeAliasNS
 addRecordSymbol table (RecordDef _ fields ident) =
-  buildRecordNS fields >>= insertSymbol table . RecordT ident
+  buildRecordNS fields >>= addSymbol table . RecordT ident
 
 buildRecordNS :: [FieldDecl] -> SemanticState FieldNS
-buildRecordNS = foldM updateFieldNS Map.empty
+buildRecordNS = foldM updateFieldNS $ FieldNS Map.empty
 
 updateFieldNS :: FieldNS -> FieldDecl -> SemanticState FieldNS
-updateFieldNS ns field@(FieldDecl _ _ ident) =
+updateFieldNS (FieldNS ns) field@(FieldDecl _ _ ident) =
   let name = getName ident
-   in case Map.lookup name ns of
-        Just (FieldDecl _ _ ident') -> addError (Redefinition ident ident') >> return ns
-        Nothing -> return $ Map.insert name field ns
+   in FieldNS <$> case Map.lookup name ns of
+        Just (NamedSymbol ident' _) -> addError (Redefinition ident ident') >> return ns
+        Nothing -> return $ Map.insert name (symbolOfField field) ns
+
+--
+-- Conversion
+--
+
+symbolOfField :: FieldDecl -> NamedSymbol
+symbolOfField (FieldDecl _ t ident) = NamedSymbol ident (BuiltinT t PassByVal)
+
+symbolTypeOfArrayType :: ArrayType -> SymbolType
+symbolTypeOfArrayType (ArrBuiltinT t) = BuiltinT t PassByVal
+
+symbolOfParam :: ProcParam -> NamedSymbol
+symbolOfParam (ProcParam _ (ParamAliasT typeId) ident) =
+  NamedSymbol ident $ AliasT (getName typeId) PassByRef
 
 instance HasIdent TypeAlias where
   getIdent (RecordT ident _) = ident
-  getIdent (ArrayT ident _) = ident
+  getIdent (ArrayT ident _ _) = ident
 
-instance HasIdent ProcHead where
-  getIdent (ProcHead _ ident _) = ident
+instance HasIdent ProcSymbol where
+  getIdent (ProcSymbol ident _) = ident
 
-instance HasIdent LocalSymbol where
-  getIdent (LocalSymbol ident _) = ident
+instance HasIdent NamedSymbol where
+  getIdent (NamedSymbol ident _) = ident

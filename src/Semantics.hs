@@ -4,37 +4,39 @@ module Semantics where
 
 import AST
 import Control.Monad.State.Strict
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import PrettyPrint (pPrintBuiltinType, printBinOp)
+import PrettyPrint (pPrintBuiltinType, printBinOp, showT)
 import Text.Parsec (SourcePos, sourceColumn, sourceLine, sourceName)
+import Util (Equivalent (..))
 
-data LocalType
+data SymbolType
   = AliasT Text ProcParamPassMode
   | BuiltinT BuiltinType ProcParamPassMode
   | StringT
   | UnknownT
   deriving (Show, Eq)
 
--- loose equality between types (i.e., ignoring modes and allowing UnknownT to equal everything)
-(=%=) :: LocalType -> LocalType -> Bool
-(AliasT name _) =%= (AliasT name' _) = name == name'
-(BuiltinT t _) =%= (BuiltinT t' _) = t == t'
-UnknownT =%= _ = True
-_ =%= UnknownT = True
-t1 =%= t2 = t1 == t2
+instance Equivalent SymbolType where
+  (AliasT name _) =%= (AliasT name' _) = name == name'
+  (BuiltinT t _) =%= (BuiltinT t' _) = t == t'
+  UnknownT =%= _ = True
+  _ =%= UnknownT = True
+  t1 =%= t2 = t1 == t2
 
 data SemanticError
   = Redefinition Ident Ident
   | UnknownType Ident
   | UnknownVar Ident
   | InvalidArrayType Ident Ident
-  | InvalidUnaryType SourcePos UnaryOp LocalType LocalType
-  | InvalidBinaryType SourcePos BinaryOp LocalType [LocalType]
-  | BinaryTypeMismatch SourcePos BinaryOp LocalType LocalType
-  | InvalidAssign SourcePos Ident LocalType LocalType
-  | UnexpectedIndex SourcePos Ident LocalType (Maybe SourcePos)
+  | InvalidUnaryType SourcePos UnaryOp SymbolType SymbolType
+  | InvalidBinaryType SourcePos BinaryOp SymbolType [SymbolType]
+  | BinaryTypeMismatch SourcePos BinaryOp SymbolType SymbolType
+  | InvalidAssign SourcePos Ident SymbolType SymbolType
+  | UnexpectedIndex SourcePos Ident SymbolType (Maybe SourcePos)
   | MissingMain
+  | MainArity SourcePos Int
   deriving (Show)
 
 type SemanticState a = State [SemanticError] a
@@ -108,15 +110,12 @@ writeError' source (InvalidAssign pos (Ident pos' _) varT exprT) =
     writeContext source pos'
   ]
 writeError' source (UnexpectedIndex pos (Ident pos' name) varT typeDeclPos) =
-  let typeDeclNote =
-        maybe
-          []
-          ( \tPos ->
-              [ noteStart tPos <> "type declared here:",
-                writeContext source tPos
-              ]
-          )
-          typeDeclPos
+  let typeDeclNote = case typeDeclPos of
+        (Just tPos) ->
+          [ noteStart tPos <> "type declared here:",
+            writeContext source tPos
+          ]
+        Nothing -> []
    in [ errorStart pos <> "unexpected index expression for variable "
           <> ticks (T.pack name)
           <> " of non-array type "
@@ -128,6 +127,10 @@ writeError' source (UnexpectedIndex pos (Ident pos' name) varT typeDeclPos) =
         ++ typeDeclNote
 writeError' _ MissingMain =
   ["error: no `main` procedure found"] -- position at end of source
+writeError' source (MainArity pos arity) =
+  [ errorStart pos <> "`main` function has arity " <> showT arity <> " (expected 0)",
+    writeContext source pos
+  ]
 
 writeContext :: [String] -> SourcePos -> Text
 writeContext source pos =
@@ -135,7 +138,7 @@ writeContext source pos =
     <> T.replicate (sourceColumn pos - 1) " "
     <> "^"
 
-writeExpectedTypes :: PrintTypeOpt -> [LocalType] -> Text
+writeExpectedTypes :: PrintTypeOpt -> [SymbolType] -> Text
 writeExpectedTypes opt [t] = ticks (printLocalType opt t)
 writeExpectedTypes opt expected =
   let types = map (ticks . printLocalType opt) expected
@@ -143,7 +146,7 @@ writeExpectedTypes opt expected =
 
 data PrintTypeOpt = PrintMode | NoPrintMode deriving (Eq)
 
-printLocalType :: PrintTypeOpt -> LocalType -> Text
+printLocalType :: PrintTypeOpt -> SymbolType -> Text
 printLocalType _ StringT = "string"
 printLocalType _ UnknownT = "unknown" -- ???
 printLocalType NoPrintMode (AliasT name _) = name
