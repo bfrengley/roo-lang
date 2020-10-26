@@ -56,7 +56,7 @@ evaluateExprType table (LVal _ lval) = evaluateLvalType table lval
 evaluateLvalType :: SymbolTable -> LValue -> SemanticState SymbolType
 evaluateLvalType table (LValue pos ident index field) = do
   varT <- case lookupVar table $ getName ident of
-    Just (NamedSymbol _ varT') -> return varT'
+    Just (LocalSymbol (NamedSymbol _ varT') _) -> return varT'
     Nothing -> addError (UnknownVar ident) >> return UnknownT
   -- if varT is an array, check the index
   -- otherwise, unexpected index expression for variable of non-array type

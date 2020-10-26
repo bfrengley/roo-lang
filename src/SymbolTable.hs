@@ -28,7 +28,11 @@ data TypeAlias
 
 type TypeAliasNS = Map Text TypeAlias
 
-type VarNS = Map Text NamedSymbol
+data LocalSymbolType = ParamS | LocalVarS
+
+data LocalSymbol = LocalSymbol NamedSymbol LocalSymbolType
+
+type VarNS = Map Text LocalSymbol
 
 data SymbolTable = SymbolTable TypeAliasNS ProcNS VarNS
 
@@ -36,7 +40,7 @@ data SymbolTable = SymbolTable TypeAliasNS ProcNS VarNS
 -- Lookup
 --
 
-lookupVar :: SymbolTable -> Text -> Maybe NamedSymbol
+lookupVar :: SymbolTable -> Text -> Maybe LocalSymbol
 lookupVar (SymbolTable _ _ locals) = flip Map.lookup locals
 
 lookupProcedure :: SymbolTable -> Text -> Maybe ProcSymbol
@@ -63,6 +67,9 @@ instance SizedSymbol SymbolType where
   typeSize _ UnknownT = Nothing
   typeSize _ _ = Just 1
 
+instance SizedSymbol LocalSymbol where
+  typeSize table (LocalSymbol sym _) = typeSize table sym
+
 instance SizedSymbol NamedSymbol where
   typeSize table (NamedSymbol _ t) = typeSize table t
 
@@ -87,7 +94,7 @@ buildLocalSymbolTable
 addParamSymbol :: TypeAliasNS -> VarNS -> ProcParam -> SemanticState VarNS
 addParamSymbol typeNS varNS (ProcParam _ t ident) = do
   localT <- getParamType typeNS t
-  addSymbol varNS (NamedSymbol ident localT)
+  addSymbol varNS $ LocalSymbol (NamedSymbol ident localT) ParamS
 
 getParamType :: TypeAliasNS -> ProcParamType -> SemanticState SymbolType
 getParamType _ (ParamBuiltinT t pass) = return $ BuiltinT t pass
@@ -97,7 +104,7 @@ addLocalVarSymbols :: TypeAliasNS -> VarNS -> VarDecl -> SemanticState VarNS
 addLocalVarSymbols typeNS varNS (VarDecl _ t idents) =
   do
     localT <- getLocalVarType typeNS t
-    let insertVar ns ident = addSymbol ns $ NamedSymbol ident localT
+    let insertVar ns ident = addSymbol ns $ LocalSymbol (NamedSymbol ident localT) LocalVarS
     foldM insertVar varNS idents
 
 getLocalVarType :: TypeAliasNS -> VarType -> SemanticState SymbolType
@@ -196,3 +203,6 @@ instance HasIdent ProcSymbol where
 
 instance HasIdent NamedSymbol where
   getIdent (NamedSymbol ident _) = ident
+
+instance HasIdent LocalSymbol where
+  getIdent (LocalSymbol sym _) = getIdent sym
