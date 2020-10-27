@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 91a8143b660e163639f9ac14c920c25db8f704f97635b23e1518628d60c8c6dd
+-- hash: 583b6014f1db504ab1869a924c0c649be66ef8ee0c96d22df24b8e70c0cc082e
 
 name:           roo-lang
 version:        0.1.0.0
@@ -41,6 +41,7 @@ library
     , mtl
     , parsec
     , text
+    , transformers
   default-language: Haskell2010
 
 executable Roo
@@ -58,6 +59,7 @@ executable Roo
     , pretty-simple
     , roo-lang
     , text
+    , transformers
   default-language: Haskell2010
 
 test-suite roo-lang-test
@@ -79,4 +81,5 @@ test-suite roo-lang-test
     , paths
     , roo-lang
     , text
+    , transformers
   default-language: Haskell2010

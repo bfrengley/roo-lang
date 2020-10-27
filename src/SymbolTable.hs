@@ -49,9 +49,29 @@ lookupProcedure (SymbolTable _ procs _) name = Map.lookup name procs
 lookupType :: SymbolTable -> Text -> Maybe TypeAlias
 lookupType (SymbolTable types _ _) = flip Map.lookup types
 
+lookupField :: SymbolTable -> Text -> Text -> Maybe NamedSymbol
+lookupField table typeName fieldName = do
+  t <- lookupType table typeName
+  case t of
+    RecordT _ fields -> Map.lookup fieldName fields
+    _ -> Nothing
+
 localVars :: SymbolTable -> [LocalSymbol]
 localVars (SymbolTable _ _ locals) =
   filter (\(LocalSymbol _ symType) -> symType == LocalVarS) $ Map.elems locals
+
+--
+-- Symbol types
+--
+
+class TypedSymbol t where
+  symbolType :: t -> SymbolType
+
+instance TypedSymbol NamedSymbol where
+  symbolType (NamedSymbol _ t) = t
+
+instance TypedSymbol LocalSymbol where
+  symbolType (LocalSymbol namedSym _) = symbolType namedSym
 
 --
 -- Symbol sizes
@@ -87,7 +107,7 @@ instance SizedSymbol ProcSymbol where
 getName :: Ident -> Text
 getName (Ident _ name) = T.pack name
 
-buildLocalSymbolTable :: SymbolTable -> Procedure -> SemanticState SymbolTable
+buildLocalSymbolTable :: SymbolTable -> Procedure -> SemanticState () SymbolTable
 buildLocalSymbolTable
   (SymbolTable typeNS procNS _)
   (Procedure (ProcHead _ _ params) (ProcBody vars _)) =
@@ -95,40 +115,40 @@ buildLocalSymbolTable
           addSymbols (addParamSymbol typeNS) params >=> addSymbols (addLocalVarSymbols typeNS) vars
      in (SymbolTable typeNS procNS <$> makeVarNS Map.empty)
 
-addParamSymbol :: TypeAliasNS -> VarNS -> ProcParam -> SemanticState VarNS
+addParamSymbol :: TypeAliasNS -> VarNS -> ProcParam -> SemanticState () VarNS
 addParamSymbol typeNS varNS (ProcParam _ t ident) = do
   localT <- getParamType typeNS t
   addSymbol varNS $ LocalSymbol (NamedSymbol ident localT) ParamS
 
-getParamType :: TypeAliasNS -> ProcParamType -> SemanticState SymbolType
+getParamType :: TypeAliasNS -> ProcParamType -> SemanticState () SymbolType
 getParamType _ (ParamBuiltinT t pass) = return $ BuiltinT t pass
 getParamType typeNS (ParamAliasT ident) = toAliasType typeNS ident PassByRef
 
-addLocalVarSymbols :: TypeAliasNS -> VarNS -> VarDecl -> SemanticState VarNS
+addLocalVarSymbols :: TypeAliasNS -> VarNS -> VarDecl -> SemanticState () VarNS
 addLocalVarSymbols typeNS varNS (VarDecl _ t idents) =
   do
     localT <- getLocalVarType typeNS t
     let insertVar ns ident = addSymbol ns $ LocalSymbol (NamedSymbol ident localT) LocalVarS
     foldM insertVar varNS idents
 
-getLocalVarType :: TypeAliasNS -> VarType -> SemanticState SymbolType
+getLocalVarType :: TypeAliasNS -> VarType -> SemanticState () SymbolType
 getLocalVarType _ (VarBuiltinT t) = return $ BuiltinT t PassByVal
 getLocalVarType typeNS (VarAliasT ident) = toAliasType typeNS ident PassByVal
 
-toAliasType :: TypeAliasNS -> Ident -> ProcParamPassMode -> SemanticState SymbolType
+toAliasType :: TypeAliasNS -> Ident -> ProcParamPassMode -> SemanticState () SymbolType
 toAliasType typeNS ident mode =
   let name = getName ident
    in if Map.member name typeNS
         then return $ AliasT name mode
         else addError (UnknownType ident) >> return UnknownT
 
-buildGlobalSymbolTable :: Program -> SemanticState SymbolTable
+buildGlobalSymbolTable :: Program -> SemanticState () SymbolTable
 buildGlobalSymbolTable (Program recs arrs procs) = do
   aliasNS <- buildTypeAliasNS recs arrs
   procNS <- buildProcNS procs
   return $ SymbolTable aliasNS procNS Map.empty
 
-buildProcNS :: [Procedure] -> SemanticState ProcNS
+buildProcNS :: [Procedure] -> SemanticState () ProcNS
 buildProcNS procs = do
   ns <- foldM addProc Map.empty procs
   when (Map.notMember "main" ns) $ addError MissingMain
@@ -137,11 +157,11 @@ buildProcNS procs = do
 addSymbols :: (Foldable t, Monad m) => (b -> a -> m b) -> t a -> b -> m b
 addSymbols addSymbol = flip (foldM addSymbol)
 
-buildTypeAliasNS :: [RecordDef] -> [ArrayDef] -> SemanticState TypeAliasNS
+buildTypeAliasNS :: [RecordDef] -> [ArrayDef] -> SemanticState () TypeAliasNS
 buildTypeAliasNS recs arrs =
   addSymbols addRecordSymbol recs >=> addSymbols addArraySymbol arrs $ Map.empty
 
-addSymbol :: HasIdent b => Map Text b -> b -> SemanticState (Map Text b)
+addSymbol :: HasIdent b => Map Text b -> b -> SemanticState () (Map Text b)
 addSymbol table sym =
   let ident = getIdent sym
       name = getName ident
@@ -149,32 +169,32 @@ addSymbol table sym =
         Just prev -> addError (Redefinition ident (getIdent prev)) >> return table
         Nothing -> return $ Map.insert name sym table
 
-addProc :: ProcNS -> Procedure -> SemanticState ProcNS
+addProc :: ProcNS -> Procedure -> SemanticState () ProcNS
 addProc table (Procedure (ProcHead _ ident params) _) =
   addSymbol table . ProcSymbol ident $ map symbolOfParam params
 
-addArraySymbol :: TypeAliasNS -> ArrayDef -> SemanticState TypeAliasNS
+addArraySymbol :: TypeAliasNS -> ArrayDef -> SemanticState () TypeAliasNS
 addArraySymbol table (ArrayDef _ size t ident) =
   let sym = ArrayT ident (fromInteger size) $ symbolTypeOfArrayType t
    in checkArrayType table t >> addSymbol table sym
 
-checkArrayType :: TypeAliasNS -> ArrayType -> SemanticState ()
+checkArrayType :: TypeAliasNS -> ArrayType -> SemanticState () ()
 checkArrayType table (ArrAliasT typeId) =
   let typename = getName typeId
    in case Map.lookup typename table of
-        Nothing -> modify (UnknownType typeId :)
+        Nothing -> addError (UnknownType typeId)
         Just (ArrayT arrTypeId _ _) -> addError (InvalidArrayType typeId arrTypeId)
         _ -> return ()
 checkArrayType _ _ = return ()
 
-addRecordSymbol :: TypeAliasNS -> RecordDef -> SemanticState TypeAliasNS
+addRecordSymbol :: TypeAliasNS -> RecordDef -> SemanticState () TypeAliasNS
 addRecordSymbol table (RecordDef _ fields ident) =
   buildRecordNS fields >>= addSymbol table . RecordT ident
 
-buildRecordNS :: [FieldDecl] -> SemanticState FieldNS
+buildRecordNS :: [FieldDecl] -> SemanticState () FieldNS
 buildRecordNS = foldM updateFieldNS Map.empty
 
-updateFieldNS :: FieldNS -> FieldDecl -> SemanticState FieldNS
+updateFieldNS :: FieldNS -> FieldDecl -> SemanticState () FieldNS
 updateFieldNS ns field@(FieldDecl _ _ ident) =
   let name = getName ident
    in case Map.lookup name ns of

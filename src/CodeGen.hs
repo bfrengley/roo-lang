@@ -1,18 +1,28 @@
 module CodeGen where
 
 import qualified AST as Roo
+import Analysis
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Maybe
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified OzAST as Oz
-import Semantics (SymbolType (..))
+import Semantics
 import SymbolTable
+import Util ((=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
 
+data OzStateVal = OzStateVal
+  { register :: Oz.Register,
+    code :: [Oz.ProgramLine]
+  }
+
 -- track the lowest free register
-type RegisterState a = State Oz.Register a
+type OzState = SemanticState OzStateVal
+
+type MaybeOzState = MaybeT OzState
 
 runtimeBoilerplate :: [Oz.ProgramLine]
 runtimeBoilerplate =
@@ -62,7 +72,7 @@ generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset
   let stackSlot = stackOffset + registerNumber
    in Oz.InstrStore (Oz.StackSlot stackSlot) register
 
-generateStmtCode :: SymbolTable -> Roo.Stmt -> RegisterState [Oz.ProgramLine]
+generateStmtCode :: SymbolTable -> Roo.Stmt -> OzState [Oz.ProgramLine]
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
   case expr of
     Roo.ConstBool _ bool -> do return $ map Oz.InstructionLine (naiveWriteBoolConst bool)
@@ -120,7 +130,7 @@ ioTypeFromExpr (Roo.LVal _ ident) symTable = error "LValue type lookup not yet i
 
 -- | Generate code for evaluating an expression. The result of calculating the
 --   expresison will end up in the returned register
-generateExpEvalCode :: Roo.Expr -> SymbolTable -> RegisterState ([Oz.Instruction], Oz.Register)
+generateExpEvalCode :: Roo.Expr -> SymbolTable -> OzState ([Oz.Instruction], Oz.Register)
 generateExpEvalCode (Roo.ConstBool _ val) symTable = do
   reg <- getNextRegister
   return ([Oz.InstrIntConst reg $ Oz.boolConst val], reg)
@@ -139,6 +149,51 @@ generateExpEvalCode (Roo.BinOpExpr _ op left right) symTable = do
   (rightInstrs, rightOperandReg) <- generateExpEvalCode right symTable
   destRegister <- getNextRegister
   return (leftInstrs ++ rightInstrs ++ [binOpInstruction op destRegister leftOperandReg rightOperandReg], destRegister)
+
+compileExpr :: SymbolTable -> Roo.Expr -> MaybeOzState Oz.Register
+compileExpr _ (Roo.ConstBool _ val) = do
+  reg <- getNextRegister
+  writeInstr $ Oz.InstrIntConst reg $ Oz.boolConst val
+  return (boolT, Just reg)
+compileExpr _ (Roo.ConstInt _ val) = do
+  reg <- getNextRegister
+  writeInstr $ Oz.InstrIntConst reg $ Oz.IntegerConst val
+  return (intT, Just reg)
+compileExpr _ (Roo.ConstStr _ val) = do
+  reg <- getNextRegister
+  writeInstr $ Oz.InstrStringConst reg $ Oz.StringConst val
+  return (StringT, Just reg)
+compileExpr table (Roo.UnOpExpr _ op expr) = do
+  exprType table expr >>= expectUnOpType op (getPos expr)
+
+  let returnT = unOpReturnType op
+  source <- compileExpr table expr
+  dest <- lift getNextRegister
+  writeInstr $ unOpInstruction op dest source'
+  return dest
+compileExpr table (Roo.BinOpExpr pos op left right) = do
+  (leftT, leftReg) <- compileExpr table left
+  expectBinOpType op (getPos left) leftT
+  (rightT, rightReg) <- compileExpr table right
+  expectBinOpType op (getPos right) rightT
+  unless (leftT =%= rightT) $ addError $ BinaryTypeMismatch pos op leftT rightT
+
+  let returnT = binOpReturnType op
+  case (leftReg, rightReg) of
+    (Just leftReg', Just rightReg') -> do
+      dest <- getNextRegister
+      writeInstr $ binOpInstruction op dest leftReg' rightReg'
+      return (returnT, Just dest)
+    _ -> return (returnT, Nothing)
+compileExpr table (Roo.LVal _ lval) = compileLvalLoad table lval
+
+-- compileLvalLoad :: SymbolTable -> Roo.LValue -> OzState
+
+writeInstr :: Oz.Instruction -> OzState ()
+writeInstr instr = writeInstrs [instr]
+
+writeInstrs :: [Oz.Instruction] -> OzState ()
+writeInstrs instrs = modify (\st -> st {code = code st ++ map Oz.InstructionLine instrs})
 
 -- evaluateExpression (Roo.LVal _)
 
@@ -214,11 +269,19 @@ binOpInstruction Roo.OpGreaterEq = Oz.InstrCmpGreaterEqualInt
 binOpInstruction Roo.OpLess = Oz.InstrCmpLessThanInt
 binOpInstruction Roo.OpLessEq = Oz.InstrCmpLessEqualInt
 
-getNextRegister :: RegisterState Oz.Register
+getNextRegister :: OzState Oz.Register
 getNextRegister = do
-  reg <- get
-  put $ incrRegister reg
+  reg <- gets register
+  modify (\st -> st {register = incrRegister reg})
   return reg
 
+-- | 'reservedRegister' is the register reserved by Oz builtin functions (such as for writing and
+-- reading). For simplicity, we don't use it except for those purposes (and in procedure calls for
+-- argument passing).
+reservedRegister :: Oz.Register
+reservedRegister = Oz.Register 0
+
+-- | 'initialRegister' is the first register we use for general purposes, which follows the reserved
+-- register.
 initialRegister :: Oz.Register
-initialRegister = Oz.Register 1
+initialRegister = incrRegister reservedRegister
