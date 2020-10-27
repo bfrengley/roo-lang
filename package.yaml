@@ -23,6 +23,7 @@ dependencies:
 - parsec
 - text
 - containers
+- ordered-containers
 - mtl
 
 library:

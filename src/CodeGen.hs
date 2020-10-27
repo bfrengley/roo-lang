@@ -38,7 +38,7 @@ generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.
     ]
   where
     -- TODO: is this safe? I think so
-    stackSize = fromMaybe 0 $ calculateStackSize symbolTable procedure
+    stackSize = fromMaybe 0 $ calculateStackSize symbolTable
     instrs = concat $ evalState (mapM (generateStmtCode symbolTable) statements) initialRegister
     stackSetup =
       if stackSize > 0
@@ -51,11 +51,11 @@ generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.
         then [Oz.InstructionLine $ Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
         else []
 
-calculateStackSize :: SymbolTable -> Roo.Procedure -> Maybe Int
-calculateStackSize table@(SymbolTable _ _ vars) (Roo.Procedure (Roo.ProcHead _ procId _) _) = do
-  paramSize <- typeSize table =<< lookupProcedure table (getName procId)
-  varSizes <- mapM (typeSize table) $ Map.elems vars
-  return $ paramSize + sum varSizes
+calculateStackSize :: SymbolTable -> Maybe Int
+calculateStackSize table@(SymbolTable _ _ vars) = do
+  paramSizes <- mapM (typeSize table) $ params vars
+  varSizes <- mapM (typeSize table) $ localVars table
+  return $ sum paramSizes + sum varSizes
 
 generateArgumentStackSaveInstr :: Oz.Register -> Int -> Oz.Instruction
 generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset =
