@@ -4,6 +4,7 @@ module Semantics where
 
 import AST
 import Control.Monad.State.Strict
+import Control.Monad.Writer.Strict
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -39,10 +40,10 @@ data SemanticError
   | MainArity SourcePos Int
   deriving (Show)
 
-type SemanticState a = State [SemanticError] a
+type SemanticState s = WriterT [SemanticError] (State s)
 
-addError :: SemanticError -> SemanticState ()
-addError err = modify (err :)
+addError :: SemanticError -> SemanticState a ()
+addError err = tell [err]
 
 writeError :: [String] -> SemanticError -> Text
 writeError source = T.unlines . writeError' source

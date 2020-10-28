@@ -4,7 +4,8 @@ module Analysis where
 
 import AST
 import Control.Monad
-import Control.Monad.State.Strict (runState)
+import Control.Monad.State.Strict (evalState)
+import Control.Monad.Writer.Strict
 import Semantics
 import SymbolTable
 import Text.Parsec (SourcePos)
@@ -19,27 +20,27 @@ analyseProgram prog@(Program _ _ procs) =
         -- analyse every procedure to record any errors
         zipWithM_ analyseProcedure localTables procs
         return localTables
-   in case runState genTables [] of
+   in case evalState (runWriterT genTables) () of
         (tables, []) -> Right tables
         (_, errs) -> Left $ reverse errs
 
-analyseProcedure :: SymbolTable -> Procedure -> SemanticState ()
+analyseProcedure :: SymbolTable -> Procedure -> SemanticState a ()
 analyseProcedure table (Procedure _ (ProcBody _ stmts)) = mapM_ (analyseStmt table) stmts
 
-analyseStmt :: SymbolTable -> Stmt -> SemanticState ()
+analyseStmt :: SymbolTable -> Stmt -> SemanticState a ()
 analyseStmt table (SAtom pos stmt) = analyseAtomicStmt table pos stmt
 analyseStmt table (SComp pos stmt) = analyseCompStmt table pos stmt
 
-analyseCompStmt :: SymbolTable -> SourcePos -> CompositeStmt -> SemanticState ()
+analyseCompStmt :: SymbolTable -> SourcePos -> CompositeStmt -> SemanticState a ()
 analyseCompStmt _ _ _ = return ()
 
-analyseAtomicStmt :: SymbolTable -> SourcePos -> AtomicStmt -> SemanticState ()
+analyseAtomicStmt :: SymbolTable -> SourcePos -> AtomicStmt -> SemanticState a ()
 analyseAtomicStmt table pos (Assign lval@(LValue _ ident _ _) expr) = do
   lvalT <- evaluateLvalType table lval
   evaluateExprType table expr >>= expectType lvalT (InvalidAssign pos ident)
 analyseAtomicStmt _ _ _ = return ()
 
-evaluateExprType :: SymbolTable -> Expr -> SemanticState SymbolType
+evaluateExprType :: SymbolTable -> Expr -> SemanticState a SymbolType
 evaluateExprType _ (ConstInt _ _) = return intT
 evaluateExprType _ (ConstBool _ _) = return boolT
 evaluateExprType _ (ConstStr _ _) = return StringT
@@ -53,10 +54,10 @@ evaluateExprType table (BinOpExpr pos op left right) = do
   return $ binOpReturnType op
 evaluateExprType table (LVal _ lval) = evaluateLvalType table lval
 
-evaluateLvalType :: SymbolTable -> LValue -> SemanticState SymbolType
+evaluateLvalType :: SymbolTable -> LValue -> SemanticState a SymbolType
 evaluateLvalType table (LValue pos ident index field) = do
   varT <- case lookupVar table $ getName ident of
-    Just (LocalSymbol (NamedSymbol _ varT') _) -> return varT'
+    Just (LocalSymbol (NamedSymbol _ varT') _ _) -> return varT'
     Nothing -> addError (UnknownVar ident) >> return UnknownT
   -- if varT is an array, check the index
   -- otherwise, unexpected index expression for variable of non-array type
@@ -64,7 +65,7 @@ evaluateLvalType table (LValue pos ident index field) = do
   -- if current type is a
   return varT
 
--- evaluateIndexExpr :: SymbolTable -> Maybe Expr -> SymbolType -> SemanticState SymbolType
+-- evaluateIndexExpr :: SymbolTable -> Maybe Expr -> SymbolType -> SemanticState a SymbolType
 -- evaluateIndexExpr _ Nothing t = return t
 -- evaluateIndexExpr table (Just expr) (AliasT name mode) = do
 --   exprT <- evaluateExprType table expr =>> expectType intT ()
@@ -79,7 +80,7 @@ expectType ::
   SymbolType ->
   (SymbolType -> SymbolType -> SemanticError) ->
   SymbolType ->
-  SemanticState ()
+  SemanticState a ()
 expectType expected makeErr actual =
   unless (actual =%= expected) (addError $ makeErr actual expected)
 
@@ -87,11 +88,11 @@ expectTypes ::
   [SymbolType] ->
   (SymbolType -> [SymbolType] -> SemanticError) ->
   SymbolType ->
-  SemanticState ()
+  SemanticState a ()
 expectTypes expected makeErr actual =
   unless (any (actual =%=) expected) (addError $ makeErr actual expected)
 
-expectUnOpType :: UnaryOp -> SourcePos -> SymbolType -> SemanticState ()
+expectUnOpType :: UnaryOp -> SourcePos -> SymbolType -> SemanticState a ()
 expectUnOpType OpNot pos = expectType boolT (InvalidUnaryType pos OpNot)
 expectUnOpType OpNeg pos = expectType intT (InvalidUnaryType pos OpNeg)
 
@@ -99,7 +100,7 @@ unOpReturnType :: UnaryOp -> SymbolType
 unOpReturnType OpNot = boolT
 unOpReturnType OpNeg = intT
 
-expectBinOpType :: BinaryOp -> SourcePos -> SymbolType -> SemanticState ()
+expectBinOpType :: BinaryOp -> SourcePos -> SymbolType -> SemanticState a ()
 expectBinOpType op pos t
   | isBooleanOp op = expectTypes [boolT] (InvalidBinaryType pos op) t
   | isRelOp op = expectTypes [boolT, intT] (InvalidBinaryType pos op) t
