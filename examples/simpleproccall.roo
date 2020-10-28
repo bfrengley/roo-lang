@@ -1,3 +1,5 @@
+array[5] integer buf5;
+
 procedure main ()
 {
     call proc(42, false);
@@ -5,6 +7,7 @@ procedure main ()
 
 procedure proc (integer n, boolean b)
     integer local;
+    buf5 localBuf;
 {
     writeln "Hello from Procedure";
     write "Integer arg is: ";
@@ -13,4 +16,10 @@ procedure proc (integer n, boolean b)
     writeln b;
     write "Local int is";
     writeln local;
+    write "Local array[5] vals are:";
+    write localBuf[0];
+    write localBuf[1];
+    write localBuf[2];
+    write localBuf[3];
+    writeln localBuf[4];
 }

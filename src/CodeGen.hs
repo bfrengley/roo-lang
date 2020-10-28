@@ -88,13 +88,16 @@ generateVariableInitializeCode :: SymbolTable -> LocalSymbol -> [Oz.ProgramLine]
 generateVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlotNo) =
   case varType of
     AliasT aliasName passMode ->
+      -- Alias types are of variable size, so they will need a variable number
+      -- of stack slot initialisations
       let typeStackSize = case typeSize symbolTable lVarSym of
             Just s -> s
             Nothing -> error $ "Variable of type " ++ T.unpack aliasName ++ " has empty stack size???"
         in map Oz.InstructionLine $
             concat $
               [ [Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst 0)],
-                -- map out a stack store/write instruction for every slot occupied by the type
+                -- simple approach - just make one stack store/write instruction
+                -- for every slot occupied by the type
                 [Oz.InstrStore (Oz.StackSlot (stackSlotNo + i)) (Oz.Register 0) | i <- [0..(typeStackSize-1)]]
               ]
     BuiltinT builtinT passMode ->
@@ -110,7 +113,6 @@ generateVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol var
             Oz.InstrStore (Oz.StackSlot stackSlotNo) (Oz.Register 0)
           ]
     _ -> error ""
--- generateVariableInitializeCode (Roo.VarDecl varDeclSp (Roo.VarAliasT (Roo.Ident typeAliasIdentSp typeAliasIdent)) varIdents) symbolTable = 
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> RegisterState [Oz.ProgramLine]
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
