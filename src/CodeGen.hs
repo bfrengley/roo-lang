@@ -15,9 +15,6 @@ data OzIOT = OzIOInt | OzIOBool | OzIOStr
 -- track the lowest free register
 type RegisterState a = State Oz.Register a
 
--- type StackOrdering = OMap LocalSymbol Int
-data StackOrdering = StackOrdering [(LocalSymbol, Int)]
-
 runtimeBoilerplate :: [Oz.ProgramLine]
 runtimeBoilerplate =
   map
@@ -49,7 +46,7 @@ generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.
       if stackSize > 0
         then
           let saveArgs = zipWith (\i arg -> Oz.InstructionLine $ generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
-              initVars = generateVariableInitializeCodeForProc procedure (Oz.StackSlot (length args)) 0 symbolTable
+              initVars = generateVariableInitializeCodeForProc symbolTable
            in concat
                 [ [Oz.InstructionLine (Oz.InstrPushStackFrame $ Oz.Framesize stackSize)],
                   saveArgs,
@@ -78,31 +75,28 @@ stackSize symbol symbolTable =
     Just s -> s
     Nothing -> error "empty stack size???"
 
-makeStackOrdering :: Roo.Procedure -> SymbolTable -> StackOrdering
-makeStackOrdering procedure symbolTable =
-  let lVars = (localVars symbolTable)
-   in StackOrdering $ scanl (\(_, sizeSumAcc) lVar -> (lVar, (sizeSumAcc + (stackSize lVar symbolTable))) ) ((head lVars), 0) lVars
-
-generateVariableInitializeCodeForProc :: Roo.Procedure -> Oz.StackSlot -> Int -> SymbolTable -> [Oz.ProgramLine]
-generateVariableInitializeCodeForProc procedure@(Roo.Procedure (Roo.ProcHead _ procId args) (Roo.ProcBody varDecls statements)) slot@(Oz.StackSlot slotNo) registerOffset symbolTable =
-  -- let variablesWithTypes = concat $ map (\(Roo.VarDecl _ varType idents) -> map (\ident -> (varType, ident)) idents ) varDecls
-  -- TODO: this funciton should accept a StackOrdering
+-- the symbol table for a given procedure contains everything needed to
+-- generate the variable initialisation code for the procedure
+generateVariableInitializeCodeForProc :: SymbolTable -> [Oz.ProgramLine]
+generateVariableInitializeCodeForProc symbolTable =
   concat $
     map
-      (\lvar -> generateVariableInitializeCode lvar slot symbolTable)
+      (generateVariableInitializeCode symbolTable)
       (localVars symbolTable)
 
-generateVariableInitializeCode :: LocalSymbol -> Oz.StackSlot -> SymbolTable -> [Oz.ProgramLine]
-generateVariableInitializeCode lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlot) slot@(Oz.StackSlot slotNo) symbolTable =
+generateVariableInitializeCode :: SymbolTable -> LocalSymbol -> [Oz.ProgramLine]
+generateVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlotNo) =
   case varType of
     AliasT aliasName passMode ->
-      let stackSize = case typeSize symbolTable lVarSym of
+      let typeStackSize = case typeSize symbolTable lVarSym of
             Just s -> s
-            Nothing -> error "empty stack size???"
-        in map Oz.InstructionLine $ concat $
-            [ [Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst 0)],
-              [Oz.InstrStore (Oz.StackSlot (slotNo + i)) (Oz.Register 0) | i <- [0..(stackSize-1)]]
-            ]
+            Nothing -> error $ "Variable of type " ++ T.unpack aliasName ++ " has empty stack size???"
+        in map Oz.InstructionLine $
+            concat $
+              [ [Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst 0)],
+                -- map out a stack store/write instruction for every slot occupied by the type
+                [Oz.InstrStore (Oz.StackSlot (stackSlotNo + i)) (Oz.Register 0) | i <- [0..(typeStackSize-1)]]
+              ]
     BuiltinT builtinT passMode ->
       let
         initialVal = case passMode of
@@ -113,7 +107,7 @@ generateVariableInitializeCode lVarSym@(LocalSymbol (NamedSymbol varIdent varTyp
       in
         map Oz.InstructionLine
           [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst initialVal),
-            Oz.InstrStore slot (Oz.Register 0)
+            Oz.InstrStore (Oz.StackSlot stackSlotNo) (Oz.Register 0)
           ]
     _ -> error ""
 -- generateVariableInitializeCode (Roo.VarDecl varDeclSp (Roo.VarAliasT (Roo.Ident typeAliasIdentSp typeAliasIdent)) varIdents) symbolTable = 
