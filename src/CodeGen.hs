@@ -93,7 +93,7 @@ generateVariableInitializeCodeForProc procedure@(Roo.Procedure (Roo.ProcHead _ p
       (localVars symbolTable)
 
 generateVariableInitializeCode :: LocalSymbol -> Oz.StackSlot -> SymbolTable -> [Oz.ProgramLine]
-generateVariableInitializeCode lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _) slot@(Oz.StackSlot slotNo) symbolTable =
+generateVariableInitializeCode lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlot) slot@(Oz.StackSlot slotNo) symbolTable =
   case varType of
     AliasT aliasName passMode ->
       let stackSize = case typeSize symbolTable lVarSym of
