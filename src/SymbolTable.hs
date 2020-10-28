@@ -16,29 +16,43 @@ import Semantics
 class HasIdent a where
   getIdent :: a -> Ident
 
+-- | Core type for symbols that have names/identifiers
 data NamedSymbol = NamedSymbol Ident SymbolType deriving (Show, Eq)
 
-type FieldNS = OMap Text NamedSymbol
-
+-- | Symbol type for procedures, which each have a name then a list of parameters
+--   (local variables are not stored in this type)
 data ProcSymbol = ProcSymbol Ident [NamedSymbol] deriving (Show, Eq)
 
+-- | Namespace of Procedures available in a program
 type ProcNS = OMap Text ProcSymbol
 
+-- | Namespace of fields within a record
+type FieldNS = OMap Text NamedSymbol
+
 data TypeAlias
-  = ArrayT Ident Int SymbolType
+  = -- | Array types have a name identifier, a fixed size, and an underlying
+    --   element type
+    ArrayT Ident Int SymbolType
+    -- | Record types have a name identifier, and a namespace of fields
   | RecordT Ident FieldNS
   deriving (Show, Eq)
 
+-- | Namespace of Type Aliases available for use in a program
 type TypeAliasNS = OMap Text TypeAlias
 
 data LocalSymbolType = ParamS | LocalVarS deriving (Show, Eq)
 
 type StackSlot = Int
 
+-- | Symbol type for parameters and local variables available within a procedure
+--   (Includes what stack slot the symbol occupies in the procedure at runtime)
 data LocalSymbol = LocalSymbol NamedSymbol LocalSymbolType StackSlot deriving (Show, Eq)
 
+-- | Namespace of parameters and local variables that are in a procedure.
 data LocalNS = LocalNS
-  { symbols :: OMap Text LocalSymbol,
+  { -- | All local variables in a procedure AND all procedure parameters
+    symbols :: OMap Text LocalSymbol,
+    -- | The (ordered) list of paramaters for a procedure
     params :: [LocalSymbol]
   }
   deriving (Show, Eq)
