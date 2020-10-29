@@ -11,6 +11,7 @@ import Semantics (SymbolType (..))
 import SymbolTable
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
+data RooWriteT = RooWrite | RooWriteLn
 
 -- track the lowest free register
 type RegisterState a = State Oz.Register a
@@ -116,34 +117,32 @@ generateVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol var
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> RegisterState [Oz.ProgramLine]
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
-  case expr of
-    Roo.ConstBool _ bool -> do return $ map Oz.InstructionLine (naiveWriteBoolConst bool)
-    Roo.ConstInt _ int -> do return $ map Oz.InstructionLine (naiveWriteIntegerConst int)
-    Roo.ConstStr _ str -> do return $ map Oz.InstructionLine (naiveWriteStringConst str)
-    expr@(Roo.BinOpExpr _ _ arg1 arg2) -> do
-      (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
-      let writeExprOutputInstrs = writeValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    expr@(Roo.UnOpExpr _ _ arg) -> do
-      (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
-      let writeExprOutputInstrs = writeValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    otherExpr -> return $ map Oz.InstructionLine (printNotYetImplemented $ "Write for expression type " ++ show otherExpr)
+  generateWriteStmtCode symbolTable RooWrite expr
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) =
-  case expr of
-    Roo.ConstBool _ bool -> do return $ map Oz.InstructionLine (naiveWriteLnBoolConst bool)
-    Roo.ConstInt _ int -> do return $ map Oz.InstructionLine (naiveWriteLnIntegerConst int)
-    Roo.ConstStr _ str -> do return $ map Oz.InstructionLine (naiveWriteLnStringConst str)
+  generateWriteStmtCode symbolTable RooWriteLn expr
+generateStmtCode _ stmt = do return $ map Oz.InstructionLine (printNotYetImplemented $ "Statement type " ++ show stmt)
+
+generateWriteStmtCode :: SymbolTable -> RooWriteT -> Roo.Expr -> RegisterState [Oz.ProgramLine]
+generateWriteStmtCode symbolTable writeT expr = do
+  writeInstrs <- case expr of
+    Roo.ConstBool _ bool -> do
+      return $ naiveWriteBoolConst writeT bool
+    Roo.ConstInt _ int -> do
+      return $ naiveWriteIntegerConst writeT int
+    Roo.ConstStr _ str -> do
+      return $ naiveWriteStringConst writeT str
     expr@(Roo.BinOpExpr _ _ arg1 arg2) -> do
       (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
       let writeExprOutputInstrs = writeLnValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
+      return $ (exprInstrs ++ writeExprOutputInstrs)
     expr@(Roo.UnOpExpr _ _ arg) -> do
       (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
       let writeExprOutputInstrs = writeLnValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    otherExpr -> return $ map Oz.InstructionLine (printNotYetImplemented $ "WriteLn for expression type " ++ show otherExpr)
-generateStmtCode _ stmt = do return $ map Oz.InstructionLine (printNotYetImplemented $ "Statement type " ++ show stmt)
+      return $ (exprInstrs ++ writeExprOutputInstrs)
+    otherExpr -> do
+      let writeTypeStr = case writeT of RooWrite -> "Write"; RooWriteLn -> "WriteLn"
+      return $ (printNotYetImplemented $ writeTypeStr ++ " for expression type " ++ show otherExpr)
+  return $ map Oz.InstructionLine writeInstrs
 
 -- | Determine what Oz IO type an expression result is (for writeln etc.)
 ioTypeFromExpr :: Roo.Expr -> SymbolTable -> OzIOT
@@ -195,42 +194,43 @@ generateExpEvalCode (Roo.BinOpExpr _ op left right) symTable = do
 -- evaluateExpression (Roo.LVal _)
 
 printNotYetImplemented :: String -> [Oz.Instruction]
-printNotYetImplemented stmntDescription = naiveWriteLnStringConst (show (stmntDescription ++ " not yet implemented"))
+printNotYetImplemented stmntDescription = naiveWriteStringConst RooWriteLn (show (stmntDescription ++ " not yet implemented"))
 
-naiveWriteBoolConst :: Bool -> [Oz.Instruction]
-naiveWriteBoolConst val =
-  [ Oz.InstrIntConst
-      (Oz.Register 0)
-      (Oz.boolConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintBool
+naiveWriteBoolConst :: RooWriteT -> Bool -> [Oz.Instruction]
+naiveWriteBoolConst writeT val =
+  concat $ [
+      [ Oz.InstrIntConst (Oz.Register 0) (Oz.boolConst val),
+        Oz.InstrCallBuiltin Oz.BuiltinPrintBool
+      ],
+      case writeT of
+        RooWriteLn -> naiveWriteNewlineConst
+        RooWrite -> []
   ]
 
-naiveWriteIntegerConst :: Integer -> [Oz.Instruction]
-naiveWriteIntegerConst val =
-  [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintInt
+naiveWriteIntegerConst :: RooWriteT -> Integer -> [Oz.Instruction]
+naiveWriteIntegerConst writeT val =
+  concat $ [
+    [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst val),
+      Oz.InstrCallBuiltin Oz.BuiltinPrintInt
+    ],
+    case writeT of
+      RooWriteLn -> naiveWriteNewlineConst
+      RooWrite -> []
   ]
 
-naiveWriteStringConst :: String -> [Oz.Instruction]
-naiveWriteStringConst val =
-  [ Oz.InstrStringConst (Oz.Register 0) (Oz.StringConst (show val)),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintString
-  ]
+naiveWriteStringConst :: RooWriteT -> String -> [Oz.Instruction]
+naiveWriteStringConst writeT val =
+  concat $ [
+      [ Oz.InstrStringConst (Oz.Register 0) (Oz.StringConst (show val)),
+        Oz.InstrCallBuiltin Oz.BuiltinPrintString
+      ],
+      case writeT of
+        RooWriteLn -> naiveWriteNewlineConst
+        RooWrite -> []
+    ]
 
 naiveWriteNewlineConst :: [Oz.Instruction]
-naiveWriteNewlineConst = naiveWriteStringConst "\n"
-
-naiveWriteLnBoolConst :: Bool -> [Oz.Instruction]
-naiveWriteLnBoolConst val =
-  naiveWriteBoolConst val ++ naiveWriteNewlineConst
-
-naiveWriteLnIntegerConst :: Integer -> [Oz.Instruction]
-naiveWriteLnIntegerConst val =
-  naiveWriteIntegerConst val ++ naiveWriteNewlineConst
-
-naiveWriteLnStringConst :: String -> [Oz.Instruction]
-naiveWriteLnStringConst val =
-  naiveWriteStringConst val ++ naiveWriteNewlineConst
+naiveWriteNewlineConst = naiveWriteStringConst RooWrite "\n"
 
 writeValFromRegister :: Oz.Register -> OzIOT -> [Oz.Instruction]
 writeValFromRegister reg typ =
