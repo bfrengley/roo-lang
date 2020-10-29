@@ -5,6 +5,7 @@ import Control.Monad.State.Strict
 import qualified Data.Map as Map
 -- import Data.Map.Ordered
 import Data.Maybe (fromMaybe)
+import Data.List
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics (SymbolType (..))
@@ -120,6 +121,13 @@ generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
   generateWriteStmtCode symbolTable RooWrite expr
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) =
   generateWriteStmtCode symbolTable RooWriteLn expr
+generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) paramExprs)) = do
+  paramExprRegisters <- mapM (\expr -> generateExpEvalCode expr symbolTable) paramExprs
+  let argCount = length paramExprs
+      paramExprInstrs = map (\(instrs, _) -> instrs) paramExprRegisters
+      (_, argCopyStms) = mapAccumL (\acc (_, reg) -> (acc + 1, Oz.InstrMove (Oz.Register acc) reg)) 0 paramExprRegisters
+      stmts = (concat paramExprInstrs) ++ argCopyStms ++ [Oz.InstrCall (Oz.Label procIdent)]
+  return $ map Oz.InstructionLine stmts
 generateStmtCode _ stmt = do return $ map Oz.InstructionLine (printNotYetImplemented $ "Statement type " ++ show stmt)
 
 generateWriteStmtCode :: SymbolTable -> RooWriteT -> Roo.Expr -> RegisterState [Oz.ProgramLine]
