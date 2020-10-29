@@ -84,6 +84,11 @@ localVars (SymbolTable _ _ locals) =
   let syms = toList $ symbols locals
    in filter (\(LocalSymbol _ symType _) -> symType == LocalVarS) syms
 
+localParams :: SymbolTable -> [LocalSymbol]
+localParams (SymbolTable _ _ locals) =
+  let syms = toList $ symbols locals
+   in filter (\(LocalSymbol _ symType _) -> symType == ParamS) syms
+
 --
 -- Symbol sizes
 --
