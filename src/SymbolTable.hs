@@ -152,8 +152,9 @@ addParamSymbol :: SymbolTable -> LocalNS -> ProcParam -> SemanticState StackSlot
 addParamSymbol table localNS (ProcParam _ t ident) = do
   localT <- getParamType table t
   slot <- getStackSlot table localT
-  vars <- addSymbol (symbols localNS) $ LocalSymbol (NamedSymbol ident localT) ParamS slot
-  return $ localNS {symbols = vars}
+  let sym = LocalSymbol (NamedSymbol ident localT) ParamS slot
+  vars <- addSymbol (symbols localNS) sym
+  return $ localNS {symbols = vars, params = params localNS ++ [sym]}
 
 getParamType :: SymbolTable -> ProcParamType -> SemanticState StackSlot SymbolType
 getParamType _ (ParamBuiltinT t pass) = return $ BuiltinT t pass
