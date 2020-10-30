@@ -48,7 +48,7 @@ generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.
       if stackSize > 0
         then
           let saveArgs = zipWith (\i arg -> Oz.InstructionLine $ generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
-              initVars = generateVariableInitializeCodeForProc symbolTable
+              initVars = generateLocalVariableInitializeCodeForProc symbolTable
            in concat
                 [ [Oz.InstructionLine (Oz.InstrPushStackFrame $ Oz.Framesize stackSize)],
                   saveArgs,
@@ -79,15 +79,15 @@ stackSize symbol symbolTable =
 
 -- the symbol table for a given procedure contains everything needed to
 -- generate the variable initialisation code for the procedure
-generateVariableInitializeCodeForProc :: SymbolTable -> [Oz.ProgramLine]
-generateVariableInitializeCodeForProc symbolTable =
+generateLocalVariableInitializeCodeForProc :: SymbolTable -> [Oz.ProgramLine]
+generateLocalVariableInitializeCodeForProc symbolTable =
   concat $
     map
-      (generateVariableInitializeCode symbolTable)
+      (generateLocalVariableInitializeCode symbolTable)
       (localVars symbolTable)
 
-generateVariableInitializeCode :: SymbolTable -> LocalSymbol -> [Oz.ProgramLine]
-generateVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlotNo) =
+generateLocalVariableInitializeCode :: SymbolTable -> LocalSymbol -> [Oz.ProgramLine]
+generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlotNo) =
   case varType of
     AliasT aliasName passMode ->
       -- Alias types are of variable size, so they will need a variable number
