@@ -6,6 +6,9 @@ import qualified Data.Map as Map
 -- import Data.Map.Ordered
 import Data.Maybe (fromMaybe)
 import Data.List
+import Data.Maybe ( mapMaybe )
+import Data.Either ( lefts, rights )
+import Data.Tuple ( fst, snd )
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics (SymbolType (..))
@@ -122,11 +125,43 @@ generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) =
   generateWriteStmtCode symbolTable RooWriteLn expr
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) paramExprs)) = do
-  paramExprRegisters <- mapM (\expr -> generateExpEvalCode expr symbolTable) paramExprs
+  let (ProcSymbol _ paramSymbols) = case lookupProcedure symbolTable (T.pack procIdent) of
+                  Just sym -> sym
+                  Nothing -> error $ "couldn't find proc with ident " ++ procIdent ++ " in symbol table???"
+      procArgPassTypes =
+        map
+        (\(NamedSymbol paramIdent paramType) -> case paramType of
+          (AliasT _ passMode) -> passMode
+          (BuiltinT _ passMode) -> passMode
+          _ -> error $ "type " ++ show paramType ++ " can't be used as argument for param " ++ show paramIdent
+        )
+        paramSymbols
+  paramSources <-
+    mapM
+    (\(expr, passType) -> case passType of
+      -- For PassByRef params the LValue is needed
+      Roo.PassByRef -> case expr of
+        Roo.LVal _ lValue -> do
+          return $ Right lValue
+        _ -> error $ "invalid expr " ++ show expr ++ " for PassByRef param"
+      -- For PassByVal params, the expression must be evaluated
+      Roo.PassByVal -> do
+        exprEvalCode <- generateExpEvalCode expr symbolTable
+        return $ Left exprEvalCode
+    )
+    (zip paramExprs procArgPassTypes)
   let argCount = length paramExprs
-      paramExprInstrs = map (\(instrs, _) -> instrs) paramExprRegisters
-      (_, argCopyStms) = mapAccumL (\acc (_, reg) -> (acc + 1, Oz.InstrMove (Oz.Register acc) reg)) 0 paramExprRegisters
-      stmts = (concat paramExprInstrs) ++ argCopyStms ++ [Oz.InstrCall (Oz.Label procIdent)]
+      paramExprCalculationInstrs = map fst (lefts paramSources)
+      argPrepStsmts =
+        map
+        (\(paramSource, procParamIndex) ->
+          let destRegister = (Oz.Register procParamIndex)
+           in case paramSource of
+            Left (_, reg) -> Oz.InstrMove destRegister reg
+            Right _ -> Oz.InstrLoadAddress destRegister (Oz.StackSlot 0) -- XXX: todo! lValue stack slot lookup...
+        )
+        (zip paramSources [0..])
+      stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
   return $ map Oz.InstructionLine stmts
 generateStmtCode _ stmt = do return $ map Oz.InstructionLine (printNotYetImplemented $ "Statement type " ++ show stmt)
 

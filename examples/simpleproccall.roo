@@ -1,11 +1,12 @@
 array[5] integer buf5;
 
 procedure main ()
+    boolean result;
 {
-    call proc(42, false);
+    call proc(42, result);
 }
 
-procedure proc (integer n, boolean b)
+procedure proc (integer val n, boolean b)
     integer local;
     buf5 localBuf;
 {
