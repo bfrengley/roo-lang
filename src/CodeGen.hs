@@ -333,7 +333,12 @@ compileLvalLoad Roo.PassByRef table (Roo.LValue _ ident Nothing Nothing) = do
 compileLvalLoad mode table (Roo.LValue pos ident index field) = do
   baseAddrReg <- compileLvalLoad Roo.PassByRef table (Roo.LValue pos ident Nothing Nothing)
 
-  return $ Oz.Register 1
+  case mode of
+    Roo.PassByRef -> return baseAddrReg
+    Roo.PassByVal -> do
+      dest <- getNextRegister
+      writeInstr $ Oz.InstrLoadIndirect dest baseAddrReg
+      return dest
 
 compileIndexExpr :: SymbolTable -> SymbolType -> Oz.Register -> Roo.Expr -> MaybeOzState Oz.Register
 compileIndexExpr table baseT dest expr = do
