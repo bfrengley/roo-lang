@@ -63,6 +63,12 @@ data SymbolTable = SymbolTable TypeAliasNS ProcNS LocalNS deriving (Show, Eq)
 -- Lookup
 --
 
+getName :: Ident -> Text
+getName (Ident _ name) = T.pack name
+
+getStackSlot :: LocalSymbol -> StackSlot
+getStackSlot (LocalSymbol _ _ slot) = slot
+
 lookupVar :: SymbolTable -> Text -> Maybe LocalSymbol
 lookupVar (SymbolTable _ _ locals) name = OMap.lookup name (symbols locals)
 
@@ -120,9 +126,9 @@ instance SizedSymbol SymbolType where
   typeSize table (AliasT name PassByVal) = do
     alias <- lookupType table name
     case alias of
-      ArrayT _ length t -> do
+      ArrayT _ len t -> do
         underlyingSize <- typeSize table t
-        return $ length * underlyingSize
+        return $ len * underlyingSize
       RecordT _ fields -> return $ OMap.size fields
   typeSize _ UnknownT = Nothing
   typeSize _ _ = Just 1
@@ -139,9 +145,6 @@ instance SizedSymbol ProcSymbol where
 --
 -- Symbol table generation
 --
-
-getName :: Ident -> Text
-getName (Ident _ name) = T.pack name
 
 emptyLocalNS :: LocalNS
 emptyLocalNS = LocalNS {symbols = OMap.empty, params = []}
@@ -171,7 +174,7 @@ discardSlotState s1 = return $ evalState s1 0
 addParamSymbol :: SymbolTable -> LocalNS -> ProcParam -> SemanticState StackSlot LocalNS
 addParamSymbol table localNS (ProcParam _ t ident) = do
   localT <- getParamType table t
-  slot <- getStackSlot table localT
+  slot <- nextStackSlot table localT
   let sym = LocalSymbol (NamedSymbol ident localT) ParamS slot
   vars <- addSymbol (symbols localNS) sym
   return $ localNS {symbols = vars, params = params localNS ++ [sym]}
@@ -184,7 +187,7 @@ addLocalVarSymbols :: SymbolTable -> LocalNS -> VarDecl -> SemanticState StackSl
 addLocalVarSymbols table localNS (VarDecl _ t idents) = do
   localT <- getLocalVarType table t
   let insertVar ns ident =
-        getStackSlot table localT
+        nextStackSlot table localT
           >>= addSymbol ns . LocalSymbol (NamedSymbol ident localT) LocalVarS
   locals <- foldM insertVar (symbols localNS) idents
   return localNS {symbols = locals}
@@ -193,8 +196,8 @@ getLocalVarType :: SymbolTable -> VarType -> SemanticState StackSlot SymbolType
 getLocalVarType _ (VarBuiltinT t) = return $ BuiltinT t PassByVal
 getLocalVarType table (VarAliasT ident) = toAliasType table ident PassByVal
 
-getStackSlot :: SymbolTable -> SymbolType -> SemanticState StackSlot StackSlot
-getStackSlot table t = do
+nextStackSlot :: SymbolTable -> SymbolType -> SemanticState StackSlot StackSlot
+nextStackSlot table t = do
   slot <- get
   put $ slot + fromMaybe 0 (typeSize table t)
   return slot

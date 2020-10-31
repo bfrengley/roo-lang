@@ -51,8 +51,11 @@ validateExpr table (BinOpExpr pos op left right) =
         expectBinOpType op (getPos left) leftT
         expectBinOpType op (getPos right) rightT
         unless (leftT =%= rightT) $ addError $ BinaryTypeMismatch pos op leftT rightT
-validateExpr table (LVal _ (LValue pos ident index field)) = do
-  return ()
+validateExpr table (LVal _ (LValue pos ident index field)) =
+  let baseT = symbolType <$> lookupVar table (getName ident)
+      exprT = getExprType table <$> index
+   in do
+        return ()
 
 getExprType :: SymbolTable -> Expr -> SymbolType
 getExprType _ (ConstInt _ _) = intT

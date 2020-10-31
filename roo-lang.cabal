@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6cf7afcf1f75a5b873ce1b88ca57a46485a025b54af2e13577604a65e849e12d
+-- hash: 623de64d511c09088d9c469935788dc1bd6f0f222e723db367eed9af1c220a53
 
 name:           roo-lang
 version:        0.1.0.0
@@ -35,6 +35,7 @@ library
       Paths_roo_lang
   hs-source-dirs:
       src
+  ghc-options: -Wall
   build-depends:
       base >=4.7 && <5
     , containers

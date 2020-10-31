@@ -224,3 +224,16 @@ data Procedure = Procedure ProcHead ProcBody
 -- a (possibly empty) series of array definitions, and a series of procedure definitions.
 data Program = Program [RecordDef] [ArrayDef] [Procedure]
   deriving (Eq, Show)
+
+--
+-- Source position extraction
+--
+
+-- TODO: does this return the start position or the operator position?
+exprPos :: Expr -> SourcePos
+exprPos (ConstStr pos _) = pos
+exprPos (ConstInt pos _) = pos
+exprPos (ConstBool pos _) = pos
+exprPos (UnOpExpr pos _ _) = pos
+exprPos (BinOpExpr pos _ _ _) = pos
+exprPos (LVal pos _) = pos

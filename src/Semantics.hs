@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Semantics where
@@ -36,13 +37,15 @@ data SemanticError
   | BinaryTypeMismatch SourcePos BinaryOp SymbolType SymbolType
   | InvalidAssign SourcePos Ident SymbolType SymbolType
   | UnexpectedIndex SourcePos Ident SymbolType (Maybe SourcePos)
+  | AliasLoadInValueMode Ident
+  | InvalidIndexType SourcePos SymbolType SymbolType
   | MissingMain
   | MainArity SourcePos Int
   deriving (Show)
 
 type SemanticState s = WriterT [SemanticError] (State s)
 
-addError :: SemanticError -> SemanticState a ()
+addError :: MonadWriter [SemanticError] m => SemanticError -> m ()
 addError err = tell [err]
 
 writeError :: [String] -> SemanticError -> Text

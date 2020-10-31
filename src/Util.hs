@@ -1,5 +1,7 @@
 module Util where
 
+import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
+
 -- | The 'Equivalent' class defines the concept of "loose" equality, as opposed to the strict
 -- mathematical equality defined by 'Eq'. This is primarily useful where you may want to define a
 -- looser concept of equality for a type while still being able to use 'Eq' (such as for types
@@ -14,3 +16,6 @@ a =>> f = do
   val <- a
   f val
   return val
+
+liftMaybe :: (Monad m) => Maybe a -> MaybeT m a
+liftMaybe = MaybeT . return
