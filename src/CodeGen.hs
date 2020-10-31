@@ -5,7 +5,12 @@ import Analysis
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
 import qualified Data.Map as Map
+-- import Data.Map.Ordered
 import Data.Maybe (fromMaybe)
+import Data.List
+import Data.Maybe ( mapMaybe )
+import Data.Either ( lefts, rights )
+import Data.Tuple ( fst, snd )
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
@@ -13,6 +18,7 @@ import SymbolTable
 import Util ((=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
+data RooWriteT = RooWrite | RooWriteLn
 
 data OzStateVal = OzStateVal
   { register :: Oz.Register,
@@ -38,70 +44,158 @@ generateCode (Roo.Program _ _ procs) tables =
     (runtimeBoilerplate ++ concat (zipWith generateProcedureCode tables procs))
 
 generateProcedureCode :: SymbolTable -> Roo.Procedure -> [Oz.ProgramLine]
-generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ ident) args) (Roo.ProcBody varDecls statements)) =
+generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ procName) args) (Roo.ProcBody varDecls statements)) =
   concat
-    [ [Oz.LabelLine (Oz.Label ident)],
+    [ [Oz.LabelLine (Oz.Label procName)],
       stackSetup,
       instrs,
       stackCleanup,
       [Oz.InstructionLine Oz.InstrReturn]
     ]
   where
-    -- TODO: is this safe? I think so
-    stackSize = fromMaybe 0 $ calculateStackSize symbolTable procedure
+    stackSize = case calculateStackSize symbolTable of
+      Just size -> size
+      Nothing -> error $ "Stack size calculation for procedure " ++ procName ++ " failed"
     instrs = concat $ evalState (mapM (generateStmtCode symbolTable) statements) initialRegister
     stackSetup =
       if stackSize > 0
         then
           let saveArgs = zipWith (\i arg -> Oz.InstructionLine $ generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
-           in Oz.InstructionLine (Oz.InstrPushStackFrame $ Oz.Framesize stackSize) : saveArgs
+              initVars = generateLocalVariableInitializeCodeForProc symbolTable
+           in concat
+                [ [Oz.InstructionLine (Oz.InstrPushStackFrame $ Oz.Framesize stackSize)],
+                  saveArgs,
+                  initVars
+                ]
         else []
     stackCleanup =
       if stackSize > 0
         then [Oz.InstructionLine $ Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
         else []
 
-calculateStackSize :: SymbolTable -> Roo.Procedure -> Maybe Int
-calculateStackSize table@(SymbolTable _ _ vars) (Roo.Procedure (Roo.ProcHead _ procId _) _) = do
-  paramSize <- typeSize table =<< lookupProcedure table (getName procId)
-  varSizes <- mapM (typeSize table) $ Map.elems vars
-  return $ paramSize + sum varSizes
+calculateStackSize :: SymbolTable -> Maybe Int
+calculateStackSize table@(SymbolTable _ _ vars) = do
+  paramSizes <- mapM (typeSize table) $ params vars
+  varSizes <- mapM (typeSize table) $ localVars table
+  return $ sum paramSizes + sum varSizes
 
 generateArgumentStackSaveInstr :: Oz.Register -> Int -> Oz.Instruction
 generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset =
-  let stackSlot = stackOffset + registerNumber
-   in Oz.InstrStore (Oz.StackSlot stackSlot) register
+  let stackSlotNo = stackOffset + registerNumber
+   in Oz.InstrStore (Oz.StackSlot stackSlotNo) register
+
+stackSize :: SizedSymbol s => s -> SymbolTable -> Int
+stackSize symbol symbolTable =
+  case typeSize symbolTable symbol of
+    Just s -> s
+    Nothing -> error "empty stack size???"
+
+-- the symbol table for a given procedure contains everything needed to
+-- generate the variable initialisation code for the procedure
+generateLocalVariableInitializeCodeForProc :: SymbolTable -> [Oz.ProgramLine]
+generateLocalVariableInitializeCodeForProc symbolTable =
+  concat $
+    map
+      (generateLocalVariableInitializeCode symbolTable)
+      (localVars symbolTable)
+
+generateLocalVariableInitializeCode :: SymbolTable -> LocalSymbol -> [Oz.ProgramLine]
+generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlotNo) =
+  case varType of
+    AliasT aliasName passMode ->
+      -- Alias types are of variable size, so they will need a variable number
+      -- of stack slot initialisations
+      let typeStackSize = case typeSize symbolTable lVarSym of
+            Just s -> s
+            Nothing -> error $ "Variable of type " ++ T.unpack aliasName ++ " has empty stack size???"
+        in map Oz.InstructionLine $
+            concat $
+              [ [Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst 0)],
+                -- simple approach - just make one stack store/write instruction
+                -- for every slot occupied by the type
+                [Oz.InstrStore (Oz.StackSlot (stackSlotNo + i)) (Oz.Register 0) | i <- [0..(typeStackSize-1)]]
+              ]
+    BuiltinT builtinT passMode ->
+      let
+        initialVal = case passMode of
+          Roo.PassByVal -> case builtinT of
+            Roo.TBool -> 0
+            Roo.TInt -> 0
+          Roo.PassByRef -> error "can't have passbyref for local var??"
+      in
+        map Oz.InstructionLine
+          [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst initialVal),
+            Oz.InstrStore (Oz.StackSlot stackSlotNo) (Oz.Register 0)
+          ]
+    _ -> error ""
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> OzState [Oz.ProgramLine]
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
-  case expr of
-    Roo.ConstBool _ bool -> do return $ map Oz.InstructionLine (naiveWriteBoolConst bool)
-    Roo.ConstInt _ int -> do return $ map Oz.InstructionLine (naiveWriteIntegerConst int)
-    Roo.ConstStr _ str -> do return $ map Oz.InstructionLine (naiveWriteStringConst str)
-    expr@(Roo.BinOpExpr _ _ arg1 arg2) -> do
-      (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
-      let writeExprOutputInstrs = writeValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    expr@(Roo.UnOpExpr _ _ arg) -> do
-      (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
-      let writeExprOutputInstrs = writeValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    otherExpr -> return $ map Oz.InstructionLine (printNotYetImplemented $ "Write for expression type " ++ show otherExpr)
+  generateWriteStmtCode symbolTable RooWrite expr
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) =
-  case expr of
-    Roo.ConstBool _ bool -> do return $ map Oz.InstructionLine (naiveWriteLnBoolConst bool)
-    Roo.ConstInt _ int -> do return $ map Oz.InstructionLine (naiveWriteLnIntegerConst int)
-    Roo.ConstStr _ str -> do return $ map Oz.InstructionLine (naiveWriteLnStringConst str)
-    expr@(Roo.BinOpExpr _ _ arg1 arg2) -> do
-      (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
-      let writeExprOutputInstrs = writeLnValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    expr@(Roo.UnOpExpr _ _ arg) -> do
-      (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
-      let writeExprOutputInstrs = writeLnValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-      return $ map Oz.InstructionLine (exprInstrs ++ writeExprOutputInstrs)
-    otherExpr -> return $ map Oz.InstructionLine (printNotYetImplemented $ "WriteLn for expression type " ++ show otherExpr)
+  generateWriteStmtCode symbolTable RooWriteLn expr
+generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) paramExprs)) = do
+  let (ProcSymbol _ paramSymbols) = case lookupProcedure symbolTable (T.pack procIdent) of
+                  Just sym -> sym
+                  Nothing -> error $ "couldn't find proc with ident " ++ procIdent ++ " in symbol table???"
+      procArgPassTypes =
+        map
+        (\(NamedSymbol paramIdent paramType) -> case paramType of
+          (AliasT _ passMode) -> passMode
+          (BuiltinT _ passMode) -> passMode
+          _ -> error $ "type " ++ show paramType ++ " can't be used as argument for param " ++ show paramIdent
+        )
+        paramSymbols
+  paramSources <-
+    mapM
+    (\(expr, passType) -> case passType of
+      -- For PassByRef params the LValue is needed
+      Roo.PassByRef -> case expr of
+        Roo.LVal _ lValue -> do
+          return $ Right lValue
+        _ -> error $ "invalid expr " ++ show expr ++ " for PassByRef param"
+      -- For PassByVal params, the expression must be evaluated
+      Roo.PassByVal -> do
+        exprEvalCode <- generateExpEvalCode expr symbolTable
+        return $ Left exprEvalCode
+    )
+    (zip paramExprs procArgPassTypes)
+  let argCount = length paramExprs
+      paramExprCalculationInstrs = map fst (lefts paramSources)
+      argPrepStsmts =
+        map
+        (\(paramSource, procParamIndex) ->
+          let destRegister = (Oz.Register procParamIndex)
+           in case paramSource of
+            Left (_, reg) -> Oz.InstrMove destRegister reg
+            Right _ -> Oz.InstrLoadAddress destRegister (Oz.StackSlot 0) -- XXX: todo! lValue stack slot lookup...
+        )
+        (zip paramSources [0..])
+      stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
+  return $ map Oz.InstructionLine stmts
 generateStmtCode _ stmt = do return $ map Oz.InstructionLine (printNotYetImplemented $ "Statement type " ++ show stmt)
+
+generateWriteStmtCode :: SymbolTable -> RooWriteT -> Roo.Expr -> RegisterState [Oz.ProgramLine]
+generateWriteStmtCode symbolTable writeT expr = do
+  writeInstrs <- case expr of
+    Roo.ConstBool _ bool -> do
+      return $ naiveWriteBoolConst writeT bool
+    Roo.ConstInt _ int -> do
+      return $ naiveWriteIntegerConst writeT int
+    Roo.ConstStr _ str -> do
+      return $ naiveWriteStringConst writeT str
+    expr@(Roo.BinOpExpr _ _ arg1 arg2) -> generateExprEvalWriteCode symbolTable writeT expr
+    expr@(Roo.UnOpExpr _ _ arg) -> generateExprEvalWriteCode symbolTable writeT expr
+    otherExpr -> do
+      let writeTypeStr = case writeT of RooWrite -> "Write"; RooWriteLn -> "WriteLn"
+      return $ (printNotYetImplemented $ writeTypeStr ++ " for expression type " ++ show otherExpr)
+  return $ map Oz.InstructionLine writeInstrs
+
+generateExprEvalWriteCode :: SymbolTable -> RooWriteT -> Roo.Expr -> RegisterState [Oz.Instruction]
+generateExprEvalWriteCode symbolTable writeT expr = do
+    (exprInstrs, exprReg) <- generateExpEvalCode expr symbolTable
+    let writeExprOutputInstrs = writeValFromRegister writeT exprReg (ioTypeFromExpr expr symbolTable)
+    return $ (exprInstrs ++ writeExprOutputInstrs)
 
 -- | Determine what Oz IO type an expression result is (for writeln etc.)
 ioTypeFromExpr :: Roo.Expr -> SymbolTable -> OzIOT
@@ -198,55 +292,57 @@ writeInstrs instrs = modify (\st -> st {code = code st ++ map Oz.InstructionLine
 -- evaluateExpression (Roo.LVal _)
 
 printNotYetImplemented :: String -> [Oz.Instruction]
-printNotYetImplemented stmntDescription = naiveWriteLnStringConst (show (stmntDescription ++ " not yet implemented"))
+printNotYetImplemented stmntDescription = naiveWriteStringConst RooWriteLn (show (stmntDescription ++ " not yet implemented"))
 
-naiveWriteBoolConst :: Bool -> [Oz.Instruction]
-naiveWriteBoolConst val =
-  [ Oz.InstrIntConst
-      (Oz.Register 0)
-      (Oz.boolConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintBool
+naiveWriteBoolConst :: RooWriteT -> Bool -> [Oz.Instruction]
+naiveWriteBoolConst writeT val =
+  concat $ [
+      [ Oz.InstrIntConst (Oz.Register 0) (Oz.boolConst val),
+        Oz.InstrCallBuiltin Oz.BuiltinPrintBool
+      ],
+      case writeT of
+        RooWriteLn -> naiveWriteNewlineConst
+        RooWrite -> []
   ]
 
-naiveWriteIntegerConst :: Integer -> [Oz.Instruction]
-naiveWriteIntegerConst val =
-  [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintInt
+naiveWriteIntegerConst :: RooWriteT -> Integer -> [Oz.Instruction]
+naiveWriteIntegerConst writeT val =
+  concat $ [
+    [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst val),
+      Oz.InstrCallBuiltin Oz.BuiltinPrintInt
+    ],
+    case writeT of
+      RooWriteLn -> naiveWriteNewlineConst
+      RooWrite -> []
   ]
 
-naiveWriteStringConst :: String -> [Oz.Instruction]
-naiveWriteStringConst val =
-  [ Oz.InstrStringConst (Oz.Register 0) (Oz.StringConst (show val)),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintString
-  ]
+naiveWriteStringConst :: RooWriteT -> String -> [Oz.Instruction]
+naiveWriteStringConst writeT val =
+  concat $ [
+      [ Oz.InstrStringConst (Oz.Register 0) (Oz.StringConst (show val)),
+        Oz.InstrCallBuiltin Oz.BuiltinPrintString
+      ],
+      case writeT of
+        RooWriteLn -> naiveWriteNewlineConst
+        RooWrite -> []
+    ]
 
 naiveWriteNewlineConst :: [Oz.Instruction]
-naiveWriteNewlineConst = naiveWriteStringConst "\n"
+naiveWriteNewlineConst = naiveWriteStringConst RooWrite "\n"
 
-naiveWriteLnBoolConst :: Bool -> [Oz.Instruction]
-naiveWriteLnBoolConst val =
-  naiveWriteBoolConst val ++ naiveWriteNewlineConst
-
-naiveWriteLnIntegerConst :: Integer -> [Oz.Instruction]
-naiveWriteLnIntegerConst val =
-  naiveWriteIntegerConst val ++ naiveWriteNewlineConst
-
-naiveWriteLnStringConst :: String -> [Oz.Instruction]
-naiveWriteLnStringConst val =
-  naiveWriteStringConst val ++ naiveWriteNewlineConst
-
-writeValFromRegister :: Oz.Register -> OzIOT -> [Oz.Instruction]
-writeValFromRegister reg typ =
-  [ Oz.InstrMove (Oz.Register 0) reg,
-    case typ of
-      OzIOBool -> Oz.InstrCallBuiltin Oz.BuiltinPrintBool
-      OzIOInt -> Oz.InstrCallBuiltin Oz.BuiltinPrintInt
-      OzIOStr -> Oz.InstrCallBuiltin Oz.BuiltinPrintString
+writeValFromRegister :: RooWriteT -> Oz.Register -> OzIOT -> [Oz.Instruction]
+writeValFromRegister writeT reg typ =
+  concat $ [
+    [ Oz.InstrMove (Oz.Register 0) reg,
+      case typ of
+        OzIOBool -> Oz.InstrCallBuiltin Oz.BuiltinPrintBool
+        OzIOInt -> Oz.InstrCallBuiltin Oz.BuiltinPrintInt
+        OzIOStr -> Oz.InstrCallBuiltin Oz.BuiltinPrintString
+    ],
+    case writeT of
+      RooWriteLn -> naiveWriteNewlineConst
+      RooWrite -> []
   ]
-
-writeLnValFromRegister :: Oz.Register -> OzIOT -> [Oz.Instruction]
-writeLnValFromRegister reg typ =
-  writeValFromRegister reg typ ++ naiveWriteNewlineConst
 
 incrRegister :: Oz.Register -> Oz.Register
 incrRegister (Oz.Register r) = Oz.Register $ r + 1

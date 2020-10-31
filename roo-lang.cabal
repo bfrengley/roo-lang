@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 583b6014f1db504ab1869a924c0c649be66ef8ee0c96d22df24b8e70c0cc082e
+-- hash: 6cf7afcf1f75a5b873ce1b88ca57a46485a025b54af2e13577604a65e849e12d
 
 name:           roo-lang
 version:        0.1.0.0
@@ -39,6 +39,7 @@ library
       base >=4.7 && <5
     , containers
     , mtl
+    , ordered-containers
     , parsec
     , text
     , transformers
@@ -55,6 +56,7 @@ executable Roo
       base >=4.7 && <5
     , containers
     , mtl
+    , ordered-containers
     , parsec
     , pretty-simple
     , roo-lang
@@ -77,6 +79,7 @@ test-suite roo-lang-test
     , containers
     , hspec
     , mtl
+    , ordered-containers
     , parsec
     , paths
     , roo-lang
