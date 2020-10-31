@@ -22,6 +22,6 @@ procedure foo(integer val x, unknown_t y, record_t z)
 procedure main ()
   boolean a;
 {
-  a <- - not 1;
-  a <- true and true < (1 != "x");
+  writeln - not 1;
+  writeln true and true < (1 != "x");
 }

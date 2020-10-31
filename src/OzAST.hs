@@ -37,7 +37,7 @@ instance OzShow IntegerConst where
 newtype StringConst = StringConst String deriving (Show, Eq)
 
 instance OzShow StringConst where
-  ozShow (StringConst s) = s
+  ozShow (StringConst s) = show s
 
 newtype Label = Label String deriving (Show, Eq)
 
@@ -49,6 +49,7 @@ data Program = Program [ProgramLine]
 -- deriving (Eq, Show)
 
 data ProgramLine = InstructionLine Instruction | LabelLine Label
+
 data LabelledBlock = LabelledBlock Label [Instruction]
 
 data Instruction

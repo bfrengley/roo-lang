@@ -222,7 +222,7 @@ buildProcNS procs = do
   return ns
 
 addSymbols :: (Foldable t, Monad m) => (b -> a -> m b) -> t a -> b -> m b
-addSymbols addSymbol = flip (foldM addSymbol)
+addSymbols addSym = flip (foldM addSym)
 
 buildTypeAliasNS :: [RecordDef] -> [ArrayDef] -> SemanticState () TypeAliasNS
 buildTypeAliasNS recs arrs =

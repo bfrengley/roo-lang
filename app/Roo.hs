@@ -7,18 +7,16 @@
 -- This module defines the Roo compiler entrypoint.
 module Main where
 
+import AST (Program)
+import CodeGen (compileRooProgram)
 import qualified Data.Text as T
 import qualified Data.Text.IO as I
-import System.Environment (getArgs, getProgName)
-import System.Exit (ExitCode (..), exitWith)
-
-import AST (Program)
-import Analysis (analyseProgram)
-import CodeGen (generateCode)
 import OzWriter (writeProgram)
 import Parser (parseRooProgram)
 import PrettyPrint (prettyPrint)
 import Semantics (writeError)
+import System.Environment (getArgs, getProgName)
+import System.Exit (ExitCode (..), exitWith)
 
 -- | 'Opt' represents the command-line flags recognised by the compiler.
 data Opt
@@ -39,42 +37,36 @@ main =
     inputRooSource <- readFile file
 
     -- Try to parse the source code
-    let parseResult = parseRooProgram file inputRooSource in
-      case parseResult of
-        -- Success - can proceed with a parsed Roo AST
-        Right ast ->
-          case opt of
-            Just OPrint ->
-              -- Output a pretty-printed version of the parsed AST
-              I.putStr (prettyPrint ast)
-            Just OAST ->
-              -- Output the AST as a Haskell datastructure
-              print ast
-            Just OCompare ->
-              if isPrintParseIdempotent ast
-                then putStrLn "OK."
-                else exitWith (ExitFailure 2)
-            Nothing ->
-              -- Treat the default option/behaviour as compilation
+    let parseResult = parseRooProgram file inputRooSource
+     in case parseResult of
+          -- Success - can proceed with a parsed Roo AST
+          Right ast ->
+            case opt of
+              Just OPrint ->
+                -- Output a pretty-printed version of the parsed AST
+                I.putStr (prettyPrint ast)
+              Just OAST ->
+                -- Output the AST as a Haskell datastructure
+                print ast
+              Just OCompare ->
+                if isPrintParseIdempotent ast
+                  then putStrLn "OK."
+                  else exitWith (ExitFailure 2)
+              Nothing ->
+                -- Treat the default option/behaviour as compilation
 
-              -- Perform semantic analysis
-              case (analyseProgram ast) of
-                Right tables ->
-                  -- no errors; generate code
-                  let compiledProgram = generateCode ast tables
-                  in
-                    -- Output a formatted/textual representation of the Oz program to stdout
+                -- Perform semantic analysis
+                case compileRooProgram ast of
+                  Right compiledProgram ->
                     putStrLn . T.unpack $ writeProgram compiledProgram
-                Left errors ->
-                  -- semantic errors found, print them out
-                  mapM_ (putStrLn . T.unpack . writeError (lines inputRooSource)) errors
-
-
-        -- Parse error
-        Left err -> do
-          putStr "Parse error at "
-          print err
-          exitWith (ExitFailure 2)
+                  Left errors ->
+                    -- semantic errors found, print them out
+                    mapM_ (putStrLn . T.unpack . writeError (lines inputRooSource)) errors
+          -- Parse error
+          Left err -> do
+            putStr "Parse error at "
+            print err
+            exitWith (ExitFailure 2)
 
 -- | 'checkArgs' tests the arguments provided to the program against the recognised arguments.
 -- If it finds unrecognised arguments, it exits and prints a usage message.
