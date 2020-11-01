@@ -203,9 +203,9 @@ generateWriteStmtCode table expr =
         writeInstr $ Oz.InstrMove reservedRegister exprReg
         case exprT of
           UnknownT -> failCompile
-          StringT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintString) >> return ()
-          _ | exprT =%= intT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintInt) >> return ()
-          _ | exprT =%= boolT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintBool) >> return ()
+          StringT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintString)
+          _ | exprT =%= intT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintInt)
+          _ | exprT =%= boolT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintBool)
           _ -> failCompile
 
 -- | Generate code for evaluating an expression. The result of calculating the
@@ -257,6 +257,10 @@ compileExpr table (Roo.BinOpExpr pos op left right) = do
   lift $ expectBinOpType op (operatorPos right) rightT
   unless (leftT =%= rightT) $ addError (BinaryTypeMismatch pos op leftT rightT)
 
+  -- forcibly evaluate both sides of the expression before we possibly fail out
+  -- if we just did `leftReg <- compileExpr table left`, it might fail and therefore exit early
+  -- without checking the right hand side of the expression, which means we'd only get errors
+  -- for the left hand side
   let leftReg = runMaybeT $ compileExpr table left
   let rightReg = runMaybeT $ compileExpr table right
   leftReg' <- lift leftReg >>= liftMaybe
@@ -308,7 +312,7 @@ compileLvalLoad mode table (Roo.LValue pos ident index field) = do
   -- this is safe because if the variable is unknown we fail the call to `compileLvalLoad`
   let varDeclaration = getIdent $ fromJust $ lookupVar table (getName ident)
   indexT <- compileIndexExpr table baseAddrReg varDeclaration index
-  _ <- compileFieldAccess table baseAddrReg varDeclaration indexT field
+  void $ compileFieldAccess table baseAddrReg varDeclaration indexT field
   case mode of
     Roo.PassByRef -> return baseAddrReg
     Roo.PassByVal -> do
@@ -350,7 +354,6 @@ compileFieldAccess table dest varIdent baseT (Just fieldIdent@(Roo.Ident pos _))
           [ Oz.InstrIntConst reg $ Oz.IntegerConst $ toInteger idx,
             Oz.InstrAddOffset dest dest reg
           ]
-        return ()
       Nothing -> addError (UnknownField fieldIdent varIdent baseT typeIdent) >> failCompile
     Just (ArrayT (Roo.Ident pos' _) _ _) ->
       addError (UnexpectedField pos varIdent baseT (Just pos')) >> failCompile
