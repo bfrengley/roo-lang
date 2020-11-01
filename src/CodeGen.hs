@@ -208,17 +208,17 @@ generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts false
 generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
   let whileIdent = "while_ln" ++ show (sourceLine sp)
       testLabel = Oz.Label $ whileIdent ++ "_test"
-      endLabel = Oz.Label $ whileIdent ++ "_end"
+      startLabel = Oz.Label $ whileIdent ++ "_start"
       evalExpr = compileExpr symbolTable testExpr
    in do
+        writeInstr $ Oz.InstrBranchUnconditional testLabel
+        writeLabel startLabel
+        mapM_ (generateStmtCode symbolTable) stmts
         writeLabel testLabel
         -- force execution to continue with a dummy register even if compiling the expression fails
         -- we'll rely on an error having been written to catch it later
         resultRegister <- fromMaybe reservedRegister <$> runMaybeT evalExpr
-        writeInstr $ Oz.InstrBranchOnFalse resultRegister endLabel
-        mapM_ (generateStmtCode symbolTable) stmts
-        writeInstr $ Oz.InstrBranchUnconditional testLabel
-        writeLabel endLabel
+        writeInstr $ Oz.InstrBranchOnTrue resultRegister startLabel
 generateStmtCode _ stmt = writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)
 
 generateWriteStmtCode :: SymbolTable -> Roo.Expr -> MaybeOzState ()
