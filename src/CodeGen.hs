@@ -17,6 +17,7 @@ import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
 import SymbolTable
+import Text.Parsec.Pos (sourceLine)
 import Util (liftMaybe, (=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
@@ -189,6 +190,35 @@ generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) para
           (zip paramSources [0 ..])
       stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
   writeInstrs stmts
+generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) =
+  let ifIdent = "if_ln" ++ show (sourceLine sp)
+      elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
+      endLabel = Oz.Label $ ifIdent ++ "_end"
+      evalExpr = compileExpr symbolTable testExpr
+   in do
+        -- force execution to continue with a dummy register even if compiling the expression fails
+        -- we'll rely on an error having been written to catch it later
+        resultRegister <- fromMaybe reservedRegister <$> runMaybeT evalExpr
+        writeInstr $ Oz.InstrBranchOnFalse resultRegister elseLabel
+        mapM_ (generateStmtCode symbolTable) trueStmts
+        writeInstr $ Oz.InstrBranchUnconditional endLabel
+        writeLabel elseLabel
+        mapM_ (generateStmtCode symbolTable) falseStmts
+        writeLabel endLabel
+generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
+  let whileIdent = "while_ln" ++ show (sourceLine sp)
+      testLabel = Oz.Label $ whileIdent ++ "_test"
+      endLabel = Oz.Label $ whileIdent ++ "_end"
+      evalExpr = compileExpr symbolTable testExpr
+   in do
+        writeLabel testLabel
+        -- force execution to continue with a dummy register even if compiling the expression fails
+        -- we'll rely on an error having been written to catch it later
+        resultRegister <- fromMaybe reservedRegister <$> runMaybeT evalExpr
+        writeInstr $ Oz.InstrBranchOnFalse resultRegister endLabel
+        mapM_ (generateStmtCode symbolTable) stmts
+        writeInstr $ Oz.InstrBranchUnconditional testLabel
+        writeLabel endLabel
 generateStmtCode _ stmt = writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)
 
 generateWriteStmtCode :: SymbolTable -> Roo.Expr -> MaybeOzState ()
