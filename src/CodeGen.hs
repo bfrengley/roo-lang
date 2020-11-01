@@ -12,6 +12,7 @@ import Data.Tuple ( fst, snd )
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics (SymbolType (..))
+import Text.Parsec.Pos ( sourceLine )
 import SymbolTable
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
@@ -163,6 +164,37 @@ generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) para
         (zip paramSources [0..])
       stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
   return $ map Oz.InstructionLine stmts
+generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) = do
+  (testExprEvalCode, resultRegister) <- generateExpEvalCode testExpr symbolTable
+  trueCaseCode <- mapM (generateStmtCode symbolTable) trueStmts
+  falseCaseCode <- mapM (generateStmtCode symbolTable) falseStmts
+  let ifIdent = "if_ln" ++ (show $ sourceLine sp)
+      elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
+      endLabel = Oz.Label $ ifIdent ++ "_end"
+  return $ concat [
+      map Oz.InstructionLine testExprEvalCode,
+      [Oz.InstructionLine $ Oz.InstrBranchOnFalse resultRegister elseLabel],
+      concat trueCaseCode,
+      [Oz.InstructionLine $ Oz.InstrBranchUnconditional endLabel],
+      [Oz.LabelLine elseLabel],
+      concat falseCaseCode,
+      [Oz.LabelLine endLabel]
+    ]
+generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) = do
+  (testExprEvalCode, resultRegister) <- generateExpEvalCode testExpr symbolTable
+  bodyCode <- mapM (generateStmtCode symbolTable) stmts
+  let whileIdent = "while_ln" ++ (show $ sourceLine sp)
+      testLabel = Oz.Label $ whileIdent ++ "_test"
+      endLabel = Oz.Label $ whileIdent ++ "_end"
+  return $ concat [
+      [Oz.LabelLine testLabel],
+      map Oz.InstructionLine testExprEvalCode,
+      [Oz.InstructionLine $ Oz.InstrBranchOnFalse resultRegister endLabel],
+      concat bodyCode,
+      [Oz.InstructionLine $ Oz.InstrBranchUnconditional testLabel],
+      [Oz.LabelLine endLabel]
+    ]
+
 generateStmtCode _ stmt = do return $ map Oz.InstructionLine (printNotYetImplemented $ "Statement type " ++ show stmt)
 
 generateWriteStmtCode :: SymbolTable -> RooWriteT -> Roo.Expr -> RegisterState [Oz.ProgramLine]
