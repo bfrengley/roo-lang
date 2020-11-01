@@ -66,20 +66,18 @@ transformStateType :: State () a -> State OzStateVal a
 transformStateType s1 = return $ evalState s1 ()
 
 generateProcedureCode :: SymbolTable -> Roo.Procedure -> OzState ()
-generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ procName) args) (Roo.ProcBody varDecls statements)) = do
+generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ procName) args) (Roo.ProcBody _ statements)) = do
   writeLabel $ Oz.Label procName
   writeInstrs stackSetup
-  instrs
-  writeInstrs $
-    concat
-      [ stackCleanup,
-        [Oz.InstrReturn]
-      ]
+  compileProcBody
+  when (stackSize > 0) $ writeInstrs stackCleanup
+  writeInstr Oz.InstrReturn
   where
     stackSize = case calculateStackSize symbolTable of
       Just size -> size
       Nothing -> error $ "Stack size calculation for procedure " ++ procName ++ " failed"
-    instrs = (mapM (generateStmtCode symbolTable) statements)
+    -- can you safely reset registers between statements? I think the answer is yes?
+    compileProcBody = mapM (generateStmtCode symbolTable) statements
     stackSetup =
       if stackSize > 0
         then
@@ -91,10 +89,7 @@ generateProcedureCode symbolTable procedure@(Roo.Procedure (Roo.ProcHead _ (Roo.
                   initVars
                 ]
         else []
-    stackCleanup =
-      if stackSize > 0
-        then [Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
-        else []
+    stackCleanup = [Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
 
 calculateStackSize :: SymbolTable -> Maybe Int
 calculateStackSize table@(SymbolTable _ _ vars) = do
