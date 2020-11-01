@@ -152,6 +152,20 @@ generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) = do
     [ Oz.InstrStringConst reservedRegister $ Oz.StringConst "\\n",
       Oz.InstrCallBuiltin Oz.BuiltinPrintString
     ]
+generateStmtCode symbolTable stmt@(Roo.SAtom _ (Roo.Read lValue)) = do
+  let lValType = getLvalType symbolTable lValue
+      readBuiltin =  case lValType of
+        (BuiltinT Roo.TBool passMode) -> Oz.BuiltinReadBool
+        (BuiltinT Roo.TInt passMode) -> Oz.BuiltinReadInt
+        -- AliasT aliasIdent passMode
+        -- StringT
+        -- UnknownT
+  writeInstrs
+    [ Oz.InstrCallBuiltin readBuiltin
+    ]
+  -- TODO: result is in r0. Need to save into LValue
+  writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)  -- return ()
+
 generateStmtCode table (Roo.SAtom _ (Roo.Call procId paramExprs)) =
   -- let (ProcSymbol _ paramSymbols) = case lookupProcedure symbolTable (T.pack procIdent) of
   --       Just sym -> sym
