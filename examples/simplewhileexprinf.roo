@@ -1,0 +1,11 @@
+array[5] integer buf5;
+
+procedure main ()
+    boolean result;
+{
+    writeln "About to enter while loop";
+    while (1 + 2 * 3) <= (4 * 5 + 6) do
+        writeln "Haha infinite loop go brrRRRRR";
+    od
+    writeln "Reached end/outside of while loop - this should never happen!";
+}

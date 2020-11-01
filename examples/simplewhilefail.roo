@@ -1,0 +1,11 @@
+array[5] integer buf5;
+
+procedure main ()
+    boolean result;
+{
+    writeln "About to enter while loop";
+    while false do
+        writeln "Inside the while loop - This should never be seen!";
+    od
+    writeln "Reached end/outside of while loop";
+}
