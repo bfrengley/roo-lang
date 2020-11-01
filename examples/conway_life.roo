@@ -80,9 +80,10 @@ procedure print_universe(universe_t universe)
   od
 
   # write a break between ticks
-  write "\n";
+  #write "\n";
   writeln "-------------------------";
-  write "\n";
+  #write "\n";
+  #write "\x1b[H";
 }
 
 # Check if the universe is alive, storing the result in `is_alive_o`.

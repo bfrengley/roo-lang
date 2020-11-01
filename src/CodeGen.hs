@@ -41,7 +41,7 @@ runtimeBoilerplate :: [Oz.ProgramLine]
 runtimeBoilerplate =
   map
     Oz.InstructionLine
-    [ Oz.InstrCall (Oz.Label "main"),
+    [ Oz.InstrCall (Oz.Label "proc_main"),
       Oz.InstrHalt
     ]
 
@@ -67,8 +67,8 @@ transformStateType :: State () a -> State OzStateVal a
 transformStateType s1 = return $ evalState s1 ()
 
 generateProcedureCode :: SymbolTable -> Roo.Procedure -> OzState ()
-generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ procName) args) (Roo.ProcBody _ statements)) = do
-  writeLabel $ Oz.Label procName
+generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ procId@(Roo.Ident _ procName) args) (Roo.ProcBody _ statements)) = do
+  writeLabel $ procLabel procId
   writeInstrs stackSetup
   compileProcBody
   when (stackSize > 0) $ writeInstrs stackCleanup
@@ -78,7 +78,7 @@ generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ (Roo.Ident _ pr
       Just size -> size
       Nothing -> error $ "Stack size calculation for procedure " ++ procName ++ " failed"
     -- can you safely reset registers between statements? I think the answer is yes?
-    compileProcBody = mapM (generateStmtCode symbolTable) statements
+    compileProcBody = mapM_ (runMaybeT . generateStmtCode symbolTable >=> const resetRegister) statements
     stackSetup =
       if stackSize > 0
         then
@@ -143,53 +143,76 @@ generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbo
           ]
     _ -> error ""
 
-generateStmtCode :: SymbolTable -> Roo.Stmt -> OzState ()
+generateStmtCode :: SymbolTable -> Roo.Stmt -> MaybeOzState ()
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
-  runMaybeT (generateWriteStmtCode symbolTable expr) >>= return . fromMaybe ()
+  generateWriteStmtCode symbolTable expr
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) = do
-  runMaybeT $ generateWriteStmtCode symbolTable expr
+  generateWriteStmtCode symbolTable expr
   writeInstrs
-    [ Oz.InstrStringConst reservedRegister $ Oz.StringConst "\n",
+    [ Oz.InstrStringConst reservedRegister $ Oz.StringConst "\\n",
       Oz.InstrCallBuiltin Oz.BuiltinPrintString
     ]
-generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) paramExprs)) = do
-  let (ProcSymbol _ paramSymbols) = case lookupProcedure symbolTable (T.pack procIdent) of
-        Just sym -> sym
-        Nothing -> error $ "couldn't find proc with ident " ++ procIdent ++ " in symbol table???"
-      procArgPassTypes =
-        map
-          ( \(NamedSymbol paramIdent paramType) -> case paramType of
-              (AliasT _ passMode) -> passMode
-              (BuiltinT _ passMode) -> passMode
-              _ -> error $ "type " ++ show paramType ++ " can't be used as argument for param " ++ show paramIdent
+generateStmtCode table (Roo.SAtom _ (Roo.Call procId paramExprs)) =
+  -- let (ProcSymbol _ paramSymbols) = case lookupProcedure symbolTable (T.pack procIdent) of
+  --       Just sym -> sym
+  --       Nothing -> error $ "couldn't find proc with ident " ++ procIdent ++ " in symbol table???"
+  --     procArgPassTypes =
+  --       map
+  --         ( \(NamedSymbol paramIdent paramType) -> case paramType of
+  --             (AliasT _ passMode) -> passMode
+  --             (BuiltinT _ passMode) -> passMode
+  --             _ -> error $ "type " ++ show paramType ++ " can't be used as argument for param " ++ show paramIdent
+  --         )
+  --         paramSymbols
+  -- paramSources <-
+  --   mapM
+  --     ( \(expr, passType) -> case passType of
+  --         -- For PassByRef params the LValue is needed
+  --         Roo.PassByRef -> case expr of
+  --           Roo.LVal _ lValue -> do
+  --             return $ Right lValue
+  --           _ -> error $ "invalid expr " ++ show expr ++ " for PassByRef param"
+  --         -- For PassByVal params, the expression must be evaluated
+  --         Roo.PassByVal -> do
+  --           exprEvalCode <- generateExpEvalCode expr symbolTable
+  --           return $ Left exprEvalCode
+  --     )
+  --     (zip paramExprs procArgPassTypes)
+  -- let paramExprCalculationInstrs = map fst (lefts paramSources)
+  --     argPrepStsmts =
+  --       map
+  --         ( \(paramSource, procParamIndex) ->
+  --             let destRegister = (Oz.Register procParamIndex)
+  --              in case paramSource of
+  --                   Left (_, reg) -> Oz.InstrMove destRegister reg
+  --                   Right _ -> Oz.InstrLoadAddress destRegister (Oz.StackSlot 0) -- XXX: todo! lValue stack slot lookup...
+  --         )
+  --         (zip paramSources [0 ..])
+  --     stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
+  -- writeInstrs stmts
+  case lookupProcedure table (getName procId) of
+    Nothing -> addError (UnknownProcedure procId) >> failCompile
+    Just (ProcSymbol _ paramSymbols) -> do
+      when (length paramExprs /= length paramSymbols) $ addError ArgumentCountMismatch -- TODO
+      registers <-
+        zipWithM
+          ( \param expr -> case getPassMode param of
+              Roo.PassByRef -> case expr of
+                -- only lvalue expressions can ever be in reference mode, since other expressions don't
+                -- have an address
+                Roo.LVal _ lval -> do
+                  -- TODO type check
+                  compileLvalLoad Roo.PassByRef table lval
+                -- can't failCompile here, needs lifted out or we exit early
+                _ -> addError ArgumentTypeMismatch >> failCompile
+              Roo.PassByVal -> do
+                unless (symbolType param =%= getExprType table expr) $ addError ArgumentTypeMismatch
+                compileExpr table expr
           )
           paramSymbols
-  paramSources <-
-    mapM
-      ( \(expr, passType) -> case passType of
-          -- For PassByRef params the LValue is needed
-          Roo.PassByRef -> case expr of
-            Roo.LVal _ lValue -> do
-              return $ Right lValue
-            _ -> error $ "invalid expr " ++ show expr ++ " for PassByRef param"
-          -- For PassByVal params, the expression must be evaluated
-          Roo.PassByVal -> do
-            exprEvalCode <- generateExpEvalCode expr symbolTable
-            return $ Left exprEvalCode
-      )
-      (zip paramExprs procArgPassTypes)
-  let paramExprCalculationInstrs = map fst (lefts paramSources)
-      argPrepStsmts =
-        map
-          ( \(paramSource, procParamIndex) ->
-              let destRegister = (Oz.Register procParamIndex)
-               in case paramSource of
-                    Left (_, reg) -> Oz.InstrMove destRegister reg
-                    Right _ -> Oz.InstrLoadAddress destRegister (Oz.StackSlot 0) -- XXX: todo! lValue stack slot lookup...
-          )
-          (zip paramSources [0 ..])
-      stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
-  writeInstrs stmts
+          paramExprs
+      zipWithM_ (\dest source -> writeInstr $ Oz.InstrMove (Oz.Register dest) source) [0 ..] registers
+      writeInstr $ Oz.InstrCall (procLabel procId)
 generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) =
   let ifIdent = "if_ln" ++ show (sourceLine sp)
       elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
@@ -198,7 +221,7 @@ generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts false
    in do
         -- force execution to continue with a dummy register even if compiling the expression fails
         -- we'll rely on an error having been written to catch it later
-        resultRegister <- fromMaybe reservedRegister <$> runMaybeT evalExpr
+        resultRegister <- lift $ forceCompile reservedRegister evalExpr
         writeInstr $ Oz.InstrBranchOnFalse resultRegister elseLabel
         mapM_ (generateStmtCode symbolTable) trueStmts
         writeInstr $ Oz.InstrBranchUnconditional endLabel
@@ -211,15 +234,45 @@ generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
       startLabel = Oz.Label $ whileIdent ++ "_start"
       evalExpr = compileExpr symbolTable testExpr
    in do
+        -- we compile while loops as if they're do-while loops (with the test after the body), but
+        -- with an immediate branch to the test
+        -- this lets us avoid an unconditional branch every loop
         writeInstr $ Oz.InstrBranchUnconditional testLabel
         writeLabel startLabel
         mapM_ (generateStmtCode symbolTable) stmts
         writeLabel testLabel
-        -- force execution to continue with a dummy register even if compiling the expression fails
-        -- we'll rely on an error having been written to catch it later
-        resultRegister <- fromMaybe reservedRegister <$> runMaybeT evalExpr
+        resultRegister <- evalExpr
         writeInstr $ Oz.InstrBranchOnTrue resultRegister startLabel
+generateStmtCode table (Roo.SAtom pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr)) =
+  let exprT = getExprType table expr
+      lvalT = getLvalType table lval
+      -- this fromJust should be safe because of laziness
+      -- if the var doesn't exist its type is UnknownT and the unless condition in the first error
+      -- will be true, because UnknownT is equal to any type, so it won't be evaluated
+      -- the when condition can never be true when the var doesn't exist because `isAliasT UnknownT`
+      -- is false, so it can't be evaluated there if it would fail
+      varDecl = getIdent $ fromJust $ lookupVar table $ getName varId
+      assignError = InvalidAssign pos varDecl lvalT exprT
+   in do
+        unless (exprT =%= lvalT) $ addError assignError
+        when (isAliasT lvalT && exprT /= UnknownT && lvalT /= exprT) $ addError assignError
+        source <- compileExpr table expr
+        -- check that reference type lvalues are in reference mode
+        -- when (isAliasT lvalT && )
+        dest <- compileLvalLoad Roo.PassByRef table lval
+        writeInstr $ Oz.InstrStoreIndirect dest source
 generateStmtCode _ stmt = writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)
+
+getPassMode :: NamedSymbol -> Roo.ProcParamPassMode
+getPassMode (NamedSymbol _ symT) = case symT of
+  AliasT _ mode -> mode
+  BuiltinT _ mode -> mode
+  -- don't print an error here - we should have caught it when building the symbol table
+  -- just pretend like we have a real mode, I don't think it matters (for now)
+  _ -> Roo.PassByVal
+
+forceCompile :: Monad m => a -> MaybeT m a -> m a
+forceCompile defaultVal action = fromMaybe defaultVal <$> runMaybeT action
 
 generateWriteStmtCode :: SymbolTable -> Roo.Expr -> MaybeOzState ()
 generateWriteStmtCode _ (Roo.ConstBool _ bool) = writeInstrs $ naiveWriteBoolConst bool
@@ -237,28 +290,6 @@ generateWriteStmtCode table expr =
           _ | exprT =%= intT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintInt)
           _ | exprT =%= boolT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintBool)
           _ -> failCompile
-
--- | Generate code for evaluating an expression. The result of calculating the
---   expresison will end up in the returned register
-generateExpEvalCode :: Roo.Expr -> SymbolTable -> OzState ([Oz.Instruction], Oz.Register)
-generateExpEvalCode (Roo.ConstBool _ val) symTable = do
-  reg <- getNextRegister
-  return ([Oz.InstrIntConst reg $ Oz.boolConst val], reg)
-generateExpEvalCode (Roo.ConstInt _ val) symTable = do
-  reg <- getNextRegister
-  return ([Oz.InstrIntConst reg $ Oz.IntegerConst val], reg)
-generateExpEvalCode (Roo.ConstStr _ str) symTable = do
-  reg <- getNextRegister
-  return ([Oz.InstrStringConst reg $ Oz.StringConst str], reg)
-generateExpEvalCode (Roo.UnOpExpr _ op expr) symTable = do
-  (sourceInstrs, sourceReg) <- generateExpEvalCode expr symTable
-  destReg <- getNextRegister
-  return (sourceInstrs ++ [unOpInstruction op destReg sourceReg], destReg)
-generateExpEvalCode (Roo.BinOpExpr _ op left right) symTable = do
-  (leftInstrs, leftOperandReg) <- generateExpEvalCode left symTable
-  (rightInstrs, rightOperandReg) <- generateExpEvalCode right symTable
-  destRegister <- getNextRegister
-  return (leftInstrs ++ rightInstrs ++ [binOpInstruction op destRegister leftOperandReg rightOperandReg], destRegister)
 
 compileExpr :: SymbolTable -> Roo.Expr -> MaybeOzState Oz.Register
 compileExpr _ (Roo.ConstBool _ val) = do
@@ -416,6 +447,9 @@ naiveWriteStringConst val =
     Oz.InstrCallBuiltin Oz.BuiltinPrintString
   ]
 
+procLabel :: Roo.Ident -> Oz.Label
+procLabel (Roo.Ident _ name) = Oz.Label ("proc_" ++ name)
+
 (|+|) :: Oz.Register -> Int -> Oz.Register
 (Oz.Register r) |+| n = Oz.Register $ r + n
 
@@ -453,6 +487,9 @@ reservedRegister = Oz.Register 0
 -- register.
 initialRegister :: Oz.Register
 initialRegister = reservedRegister |+| 1
+
+resetRegister :: MonadState OzStateVal m => m ()
+resetRegister = modify (\st -> st {register = initialRegister})
 
 failCompile :: Monad m => MaybeT m a
 failCompile = liftMaybe Nothing

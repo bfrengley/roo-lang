@@ -1,0 +1,15 @@
+record { integer a; boolean b } record_t;
+array[2] integer int2_t;
+
+procedure main ()
+  boolean a;
+  record_t rec;
+  int2_t int_arr;
+{
+  a <- true;
+  rec.a <- 1;
+  rec.b <- true;
+  int_arr[1] <- 1;
+
+  writeln int_arr[1];
+}

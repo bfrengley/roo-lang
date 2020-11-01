@@ -10,52 +10,7 @@ import Data.Maybe (fromMaybe)
 import Semantics
 import SymbolTable
 import Text.Parsec (SourcePos)
-import Util ((=%=), (=>>))
-
--- Perform semantic analysis of the program and return the Symbol Tables for each procedure if there are no errors
-analyseProgram :: Program -> Either [SemanticError] [SymbolTable]
-analyseProgram prog@(Program _ _ procs) =
-  let genTables = do
-        globalTable <- buildGlobalSymbolTable prog
-        localTables <- mapM (buildLocalSymbolTable globalTable) procs
-        -- analyse every procedure to record any errors
-        -- zipWithM_ analyseProcedure localTables procs
-        return localTables
-   in case evalState (runWriterT genTables) () of
-        (tables, []) -> Right tables
-        (_, errs) -> Left $ reverse errs
-
--- analyseProcedure :: SymbolTable -> Procedure -> SemanticState a ()
--- analyseProcedure table (Procedure _ (ProcBody _ stmts)) = mapM_ (analyseStmt table) stmts
-
--- analyseStmt :: SymbolTable -> Stmt -> SemanticState a ()
--- analyseStmt table (SAtom pos stmt) = analyseAtomicStmt table pos stmt
--- analyseStmt table (SComp pos stmt) = analyseCompStmt table pos stmt
-
--- analyseCompStmt :: SymbolTable -> SourcePos -> CompositeStmt -> SemanticState a ()
--- analyseCompStmt _ _ _ = return ()
-
--- analyseAtomicStmt :: SymbolTable -> SourcePos -> AtomicStmt -> SemanticState a ()
--- analyseAtomicStmt table pos (Assign lval@(LValue _ ident _ _) expr) = do
---   lvalT <- evaluateLvalType table lval
---   evaluategetExprType table expr >>= expectType lvalT (InvalidAssign pos ident)
--- analyseAtomicStmt _ _ _ = return ()
-
-validateExpr :: SymbolTable -> Expr -> SemanticState a ()
-validateExpr table (UnOpExpr _ op expr) =
-  expectUnOpType op (operatorPos expr) $ getExprType table expr
-validateExpr table (BinOpExpr pos op left right) =
-  let leftT = getExprType table left
-      rightT = getExprType table right
-   in do
-        expectBinOpType op (operatorPos left) leftT
-        expectBinOpType op (operatorPos right) rightT
-        unless (leftT =%= rightT) $ addError $ BinaryTypeMismatch pos op leftT rightT
-validateExpr table (LVal _ (LValue pos ident index field)) =
-  let baseT = symbolType <$> lookupVar table (getName ident)
-      exprT = getExprType table <$> index
-   in do
-        return ()
+import Util ((=%=))
 
 getExprType :: SymbolTable -> Expr -> SymbolType
 getExprType _ (ConstInt _ _) = intT

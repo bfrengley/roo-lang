@@ -37,7 +37,7 @@ instance OzShow IntegerConst where
 newtype StringConst = StringConst String deriving (Show, Eq)
 
 instance OzShow StringConst where
-  ozShow (StringConst s) = show s
+  ozShow (StringConst s) = "\"" ++ s ++ "\""
 
 newtype Label = Label String deriving (Show, Eq)
 

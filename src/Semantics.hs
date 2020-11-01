@@ -30,6 +30,9 @@ data SemanticError
   = Redefinition Ident Ident
   | UnknownType Ident
   | UnknownVar Ident
+  | UnknownProcedure Ident
+  | ArgumentCountMismatch -- TODO
+  | ArgumentTypeMismatch -- TODO
   | InvalidArrayType Ident Ident
   | InvalidUnaryType SourcePos UnaryOp SymbolType SymbolType
   | InvalidBinaryType SourcePos BinaryOp SymbolType [SymbolType]
@@ -66,6 +69,10 @@ writeError' source (UnknownType (Ident pos name)) =
   ]
 writeError' source (UnknownVar (Ident pos name)) =
   [ errorStart pos <> "undeclared variable " <> ticks (T.pack name),
+    writeContext source pos
+  ]
+writeError' source (UnknownProcedure (Ident pos name)) =
+  [ errorStart pos <> "undeclared procedure " <> ticks (T.pack name),
     writeContext source pos
   ]
 writeError' source (InvalidArrayType (Ident pos name) (Ident pos' _)) =
