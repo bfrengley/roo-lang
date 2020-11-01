@@ -1,0 +1,25 @@
+record { integer a; integer b } record_t;
+array[10] integer int_arr_t;
+array[10] record_t record_arr_t;
+
+procedure main ()
+    record_t rec;
+    int_arr_t int_arr;
+    record_arr_t rec_arr;
+{
+    writeln rec.a; # valid
+    writeln rec.foo; # unknown field
+    writeln rec[0 + 2]; # unexpected index expression
+    writeln int_arr[0]; # valid
+    writeln int_arr.foo; # unexpected field
+    writeln int_arr[0].foo; # unexpected field
+    writeln rec_arr[0].a; # valid
+    writeln rec_arr.foo; # unexpected field
+    writeln rec_arr[0].foo; # unknown field
+    writeln unknown_var[0].foo; # undeclared variable
+
+    # invalid index types
+    writeln int_arr["str"];
+    writeln int_arr[int_arr[0]];
+    writeln int_arr[rec]; # also trying to load record type as value
+}

@@ -43,13 +43,13 @@ analyseProgram prog@(Program _ _ procs) =
 
 validateExpr :: SymbolTable -> Expr -> SemanticState a ()
 validateExpr table (UnOpExpr _ op expr) =
-  expectUnOpType op (getPos expr) $ getExprType table expr
+  expectUnOpType op (operatorPos expr) $ getExprType table expr
 validateExpr table (BinOpExpr pos op left right) =
   let leftT = getExprType table left
       rightT = getExprType table right
    in do
-        expectBinOpType op (getPos left) leftT
-        expectBinOpType op (getPos right) rightT
+        expectBinOpType op (operatorPos left) leftT
+        expectBinOpType op (operatorPos right) rightT
         unless (leftT =%= rightT) $ addError $ BinaryTypeMismatch pos op leftT rightT
 validateExpr table (LVal _ (LValue pos ident index field)) =
   let baseT = symbolType <$> lookupVar table (getName ident)
@@ -95,6 +95,10 @@ boolT = BuiltinT TBool PassByVal
 
 intT :: SymbolType
 intT = BuiltinT TInt PassByVal
+
+isAliasT :: SymbolType -> Bool
+isAliasT (AliasT _ _) = True
+isAliasT _ = False
 
 expectType ::
   SymbolType ->
@@ -144,10 +148,10 @@ isBooleanOp = (`elem` [OpAnd, OpOr])
 isArithOp :: BinaryOp -> Bool
 isArithOp = (`elem` [OpPlus, OpMinus, OpMul, OpDiv])
 
-getPos :: Expr -> SourcePos
-getPos (ConstInt pos _) = pos
-getPos (ConstStr pos _) = pos
-getPos (ConstBool pos _) = pos
-getPos (UnOpExpr pos _ _) = pos
-getPos (BinOpExpr pos _ _ _) = pos
-getPos (LVal pos _) = pos
+operatorPos :: Expr -> SourcePos
+operatorPos (ConstInt pos _) = pos
+operatorPos (ConstStr pos _) = pos
+operatorPos (ConstBool pos _) = pos
+operatorPos (UnOpExpr pos _ _) = pos
+operatorPos (LVal pos _) = pos
+operatorPos (BinOpExpr pos _ _ _) = pos

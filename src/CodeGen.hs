@@ -11,8 +11,8 @@ import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Writer.Strict (mapWriterT, runWriterT)
 import Data.Either (lefts, rights)
 import Data.List
-import qualified Data.Map as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import qualified Data.Map.Ordered as OMap
+import Data.Maybe (fromJust, fromMaybe, mapMaybe)
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
@@ -144,9 +144,9 @@ generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbo
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> OzState ()
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
-  generateWriteStmtCode symbolTable expr
+  runMaybeT (generateWriteStmtCode symbolTable expr) >>= return . fromMaybe ()
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) = do
-  generateWriteStmtCode symbolTable expr
+  runMaybeT $ generateWriteStmtCode symbolTable expr
   writeInstrs
     [ Oz.InstrStringConst reservedRegister $ Oz.StringConst "\n",
       Oz.InstrCallBuiltin Oz.BuiltinPrintString
@@ -191,44 +191,22 @@ generateStmtCode symbolTable (Roo.SAtom _ (Roo.Call (Roo.Ident _ procIdent) para
   writeInstrs stmts
 generateStmtCode _ stmt = writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)
 
-generateWriteStmtCode :: SymbolTable -> Roo.Expr -> OzState ()
+generateWriteStmtCode :: SymbolTable -> Roo.Expr -> MaybeOzState ()
 generateWriteStmtCode _ (Roo.ConstBool _ bool) = writeInstrs $ naiveWriteBoolConst bool
 generateWriteStmtCode _ (Roo.ConstInt _ int) = writeInstrs $ naiveWriteIntegerConst int
 generateWriteStmtCode _ (Roo.ConstStr _ str) = writeInstrs $ naiveWriteStringConst str
-generateWriteStmtCode table expr = do
-  v <- runMaybeT $ generateExprEvalWriteCode table expr
-  return $ fromMaybe () v
-
-generateExprEvalWriteCode :: SymbolTable -> Roo.Expr -> MaybeOzState ()
-generateExprEvalWriteCode symbolTable expr = do
-  exprReg <- compileExpr symbolTable expr
-  let writeExprOutputInstrs = writeValFromRegister exprReg (ioTypeFromExpr expr symbolTable)
-  writeInstrs writeExprOutputInstrs
-
--- | Determine what Oz IO type an expression result is (for writeln etc.)
-ioTypeFromExpr :: Roo.Expr -> SymbolTable -> OzIOT
-ioTypeFromExpr (Roo.ConstBool _ _) _ = OzIOBool
-ioTypeFromExpr (Roo.ConstInt _ _) _ = OzIOInt
-ioTypeFromExpr (Roo.ConstStr _ _) _ = OzIOStr
-ioTypeFromExpr (Roo.BinOpExpr _ op arg1 arg2) _ = case op of
-  -- I believe that this is correct and that it's not necessary to inspect
-  -- the operands any further to determine an output type
-  Roo.OpPlus -> OzIOInt
-  Roo.OpMinus -> OzIOInt
-  Roo.OpMul -> OzIOInt
-  Roo.OpDiv -> OzIOInt
-  Roo.OpAnd -> OzIOBool
-  Roo.OpOr -> OzIOBool
-  Roo.OpEq -> OzIOBool
-  Roo.OpNeq -> OzIOBool
-  Roo.OpGreater -> OzIOBool
-  Roo.OpGreaterEq -> OzIOBool
-  Roo.OpLess -> OzIOBool
-  Roo.OpLessEq -> OzIOBool
-ioTypeFromExpr (Roo.UnOpExpr _ op arg) _ = case op of
-  Roo.OpNot -> OzIOBool
-  Roo.OpNeg -> OzIOInt
-ioTypeFromExpr (Roo.LVal _ ident) symTable = error "LValue type lookup not yet implemented"
+generateWriteStmtCode table expr =
+  let exprT = getExprType table expr
+   in do
+        when (isAliasT exprT) $ addError (AliasWrite (Roo.exprStart expr) exprT)
+        exprReg <- compileExpr table expr
+        writeInstr $ Oz.InstrMove reservedRegister exprReg
+        case exprT of
+          UnknownT -> failCompile
+          StringT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintString) >> return ()
+          _ | exprT =%= intT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintInt) >> return ()
+          _ | exprT =%= boolT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintBool) >> return ()
+          _ -> failCompile
 
 -- | Generate code for evaluating an expression. The result of calculating the
 --   expresison will end up in the returned register
@@ -266,7 +244,7 @@ compileExpr _ (Roo.ConstStr _ val) = do
   writeInstr $ Oz.InstrStringConst reg (Oz.StringConst val)
   return reg
 compileExpr table (Roo.UnOpExpr _ op expr) = do
-  lift $ expectUnOpType op (getPos expr) $ getExprType table expr
+  lift $ expectUnOpType op (operatorPos expr) $ getExprType table expr
 
   source <- compileExpr table expr
   dest <- getNextRegister
@@ -274,9 +252,9 @@ compileExpr table (Roo.UnOpExpr _ op expr) = do
   return dest
 compileExpr table (Roo.BinOpExpr pos op left right) = do
   let leftT = getExprType table left
-  lift $ expectBinOpType op (getPos left) leftT
+  lift $ expectBinOpType op (operatorPos left) leftT
   let rightT = getExprType table right
-  lift $ expectBinOpType op (getPos right) rightT
+  lift $ expectBinOpType op (operatorPos right) rightT
   unless (leftT =%= rightT) $ addError (BinaryTypeMismatch pos op leftT rightT)
 
   let leftReg = runMaybeT $ compileExpr table left
@@ -294,7 +272,7 @@ compileLvalLoad Roo.PassByVal table (Roo.LValue _ ident Nothing Nothing) = do
   var <- checkedLookupVar table ident
   case symbolType var of
     -- an alias type can never be loaded in value mode
-    AliasT _ _ -> addError (AliasLoadInValueMode ident) >> liftMaybe Nothing
+    t@(AliasT _ _) -> addError (AliasLoadInValueMode ident (getIdent var) t) >> failCompile
     BuiltinT _ mode -> do
       dest <- getNextRegister
       let sourceSlot = ozStackSlot var
@@ -310,7 +288,7 @@ compileLvalLoad Roo.PassByVal table (Roo.LValue _ ident Nothing Nothing) = do
               Oz.InstrLoadIndirect dest addrReg
             ]
       return dest
-    _ -> liftMaybe Nothing
+    _ -> failCompile
 compileLvalLoad Roo.PassByRef table (Roo.LValue _ ident Nothing Nothing) = do
   var <- checkedLookupVar table ident
   mode <- liftMaybe $ case symbolType var of
@@ -327,7 +305,10 @@ compileLvalLoad Roo.PassByRef table (Roo.LValue _ ident Nothing Nothing) = do
   return dest
 compileLvalLoad mode table (Roo.LValue pos ident index field) = do
   baseAddrReg <- compileLvalLoad Roo.PassByRef table (Roo.LValue pos ident Nothing Nothing)
-
+  -- this is safe because if the variable is unknown we fail the call to `compileLvalLoad`
+  let varDeclaration = getIdent $ fromJust $ lookupVar table (getName ident)
+  indexT <- compileIndexExpr table baseAddrReg varDeclaration index
+  _ <- compileFieldAccess table baseAddrReg varDeclaration indexT field
   case mode of
     Roo.PassByRef -> return baseAddrReg
     Roo.PassByVal -> do
@@ -335,37 +316,51 @@ compileLvalLoad mode table (Roo.LValue pos ident index field) = do
       writeInstr $ Oz.InstrLoadIndirect dest baseAddrReg
       return dest
 
-compileIndexExpr :: SymbolTable -> SymbolType -> Oz.Register -> Roo.Expr -> MaybeOzState Oz.Register
-compileIndexExpr table baseT dest expr = do
-  lift $ expectType intT (InvalidIndexType (Roo.exprPos expr)) $ getExprType table expr
-  let elemT =
-        ( case baseT of
-            AliasT name _ -> case lookupType table name of
-              Just (ArrayT _ _ elemT') -> elemT'
-              _ -> UnknownT
-            _ -> UnknownT
-        )
-  offsetReg <- compileExpr table expr
-  -- is sub correct?
-  writeInstr $ Oz.InstrSubOffset dest dest offsetReg
-  return dest
+compileIndexExpr :: SymbolTable -> Oz.Register -> Roo.Ident -> Maybe Roo.Expr -> MaybeOzState SymbolType
+compileIndexExpr table _ varIdent Nothing =
+  liftMaybe $ symbolType <$> lookupVar table (getName varIdent)
+compileIndexExpr table dest varIdent (Just expr) =
+  let pos = Roo.exprStart expr
+      baseT = symbolType <$> lookupVar table (getName varIdent)
+   in do
+        elemT <-
+          ( case baseT of
+              Just baseT'@(AliasT name _) -> case lookupType table name of
+                Just (ArrayT _ _ elemT') -> return elemT'
+                Just (RecordT (Roo.Ident pos' _) _) ->
+                  addError (UnexpectedIndex pos varIdent baseT' (Just pos')) >> failCompile
+                _ -> failCompile
+              Just baseT' -> addError (UnexpectedIndex pos varIdent baseT' Nothing) >> failCompile
+              Nothing -> failCompile
+            )
+        lift $ expectType intT (InvalidIndexType pos) $ getExprType table expr
+        offsetReg <- compileExpr table expr
+        -- is sub correct?
+        writeInstr $ Oz.InstrSubOffset dest dest offsetReg
+        return elemT
+
+compileFieldAccess :: SymbolTable -> Oz.Register -> Roo.Ident -> SymbolType -> Maybe Roo.Ident -> MaybeOzState ()
+compileFieldAccess _ _ _ _ Nothing = return ()
+compileFieldAccess table dest varIdent baseT (Just fieldIdent@(Roo.Ident pos _)) = case baseT of
+  AliasT name _ -> case lookupType table name of
+    Just (RecordT typeIdent fields) -> case OMap.lookup (getName fieldIdent) fields of
+      Just (FieldSymbol _ idx) -> do
+        reg <- getNextRegister
+        writeInstrs
+          [ Oz.InstrIntConst reg $ Oz.IntegerConst $ toInteger idx,
+            Oz.InstrAddOffset dest dest reg
+          ]
+        return ()
+      Nothing -> addError (UnknownField fieldIdent varIdent baseT typeIdent) >> failCompile
+    Just (ArrayT (Roo.Ident pos' _) _ _) ->
+      addError (UnexpectedField pos varIdent baseT (Just pos')) >> failCompile
+    _ -> failCompile
+  _ -> addError (UnexpectedField pos varIdent baseT Nothing) >> failCompile
 
 checkedLookupVar :: SymbolTable -> Roo.Ident -> MaybeOzState LocalSymbol
 checkedLookupVar table ident = case lookupVar table (getName ident) of
   Just v -> return v
-  Nothing -> addError (UnknownVar ident) >> liftMaybe Nothing
-
-ozStackSlot :: LocalSymbol -> Oz.StackSlot
-ozStackSlot (LocalSymbol _ _ slot) = Oz.StackSlot slot
-
-writeInstr :: MonadState OzStateVal m => Oz.Instruction -> m ()
-writeInstr instr = writeInstrs [instr]
-
-writeInstrs :: MonadState OzStateVal m => [Oz.Instruction] -> m ()
-writeInstrs instrs = modify (\st -> st {code = code st ++ map Oz.InstructionLine instrs})
-
-writeLabel :: MonadState OzStateVal m => Oz.Label -> m ()
-writeLabel label = modify (\st -> st {code = code st ++ [Oz.LabelLine label]})
+  Nothing -> addError (UnknownVar ident) >> failCompile
 
 printNotYetImplemented :: String -> [Oz.Instruction]
 printNotYetImplemented stmntDescription = naiveWriteStringConst (show (stmntDescription ++ " not yet implemented\n"))
@@ -386,15 +381,6 @@ naiveWriteStringConst :: String -> [Oz.Instruction]
 naiveWriteStringConst val =
   [ Oz.InstrStringConst reservedRegister (Oz.StringConst val),
     Oz.InstrCallBuiltin Oz.BuiltinPrintString
-  ]
-
-writeValFromRegister :: Oz.Register -> OzIOT -> [Oz.Instruction]
-writeValFromRegister reg typ =
-  [ Oz.InstrMove reservedRegister reg,
-    case typ of
-      OzIOBool -> Oz.InstrCallBuiltin Oz.BuiltinPrintBool
-      OzIOInt -> Oz.InstrCallBuiltin Oz.BuiltinPrintInt
-      OzIOStr -> Oz.InstrCallBuiltin Oz.BuiltinPrintString
   ]
 
 (|+|) :: Oz.Register -> Int -> Oz.Register
@@ -434,3 +420,18 @@ reservedRegister = Oz.Register 0
 -- register.
 initialRegister :: Oz.Register
 initialRegister = reservedRegister |+| 1
+
+failCompile :: Monad m => MaybeT m a
+failCompile = liftMaybe Nothing
+
+ozStackSlot :: LocalSymbol -> Oz.StackSlot
+ozStackSlot (LocalSymbol _ _ slot) = Oz.StackSlot slot
+
+writeInstr :: MonadState OzStateVal m => Oz.Instruction -> m ()
+writeInstr instr = writeInstrs [instr]
+
+writeInstrs :: MonadState OzStateVal m => [Oz.Instruction] -> m ()
+writeInstrs instrs = modify (\st -> st {code = code st ++ map Oz.InstructionLine instrs})
+
+writeLabel :: MonadState OzStateVal m => Oz.Label -> m ()
+writeLabel label = modify (\st -> st {code = code st ++ [Oz.LabelLine label]})

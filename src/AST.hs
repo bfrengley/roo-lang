@@ -229,11 +229,11 @@ data Program = Program [RecordDef] [ArrayDef] [Procedure]
 -- Source position extraction
 --
 
--- TODO: does this return the start position or the operator position?
-exprPos :: Expr -> SourcePos
-exprPos (ConstStr pos _) = pos
-exprPos (ConstInt pos _) = pos
-exprPos (ConstBool pos _) = pos
-exprPos (UnOpExpr pos _ _) = pos
-exprPos (BinOpExpr pos _ _ _) = pos
-exprPos (LVal pos _) = pos
+exprStart :: Expr -> SourcePos
+exprStart (ConstStr pos _) = pos
+exprStart (ConstInt pos _) = pos
+exprStart (ConstBool pos _) = pos
+exprStart (UnOpExpr pos _ _) = pos
+-- the position in a binary expression is the position of the operator, not the expression start
+exprStart (BinOpExpr _ _ left _) = exprStart left
+exprStart (LVal pos _) = pos

@@ -6,7 +6,6 @@ module Semantics where
 import AST
 import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import PrettyPrint (pPrintBuiltinType, printBinOp, showT)
@@ -37,7 +36,10 @@ data SemanticError
   | BinaryTypeMismatch SourcePos BinaryOp SymbolType SymbolType
   | InvalidAssign SourcePos Ident SymbolType SymbolType
   | UnexpectedIndex SourcePos Ident SymbolType (Maybe SourcePos)
-  | AliasLoadInValueMode Ident
+  | UnexpectedField SourcePos Ident SymbolType (Maybe SourcePos)
+  | UnknownField Ident Ident SymbolType Ident
+  | AliasLoadInValueMode Ident Ident SymbolType
+  | AliasWrite SourcePos SymbolType
   | InvalidIndexType SourcePos SymbolType SymbolType
   | MissingMain
   | MainArity SourcePos Int
@@ -59,11 +61,11 @@ writeError' source (Redefinition (Ident pos name) (Ident pos' _)) =
     writeContext source pos'
   ]
 writeError' source (UnknownType (Ident pos name)) =
-  [ errorStart pos <> "unknown type " <> ticks (T.pack name),
+  [ errorStart pos <> "undeclared type " <> ticks (T.pack name),
     writeContext source pos
   ]
 writeError' source (UnknownVar (Ident pos name)) =
-  [ errorStart pos <> "unknown variable " <> ticks (T.pack name),
+  [ errorStart pos <> "undeclared variable " <> ticks (T.pack name),
     writeContext source pos
   ]
 writeError' source (InvalidArrayType (Ident pos name) (Ident pos' _)) =
@@ -113,22 +115,61 @@ writeError' source (InvalidAssign pos (Ident pos' _) varT exprT) =
     noteStart pos' <> "variable declared here:",
     writeContext source pos'
   ]
-writeError' source (UnexpectedIndex pos (Ident pos' name) varT typeDeclPos) =
+writeError' source (UnexpectedIndex pos (Ident pos' _) varT typeDeclPos) =
   let typeDeclNote = case typeDeclPos of
         (Just tPos) ->
           [ noteStart tPos <> "type declared here:",
             writeContext source tPos
           ]
         Nothing -> []
-   in [ errorStart pos <> "unexpected index expression for variable "
-          <> ticks (T.pack name)
-          <> " of non-array type "
+   in [ errorStart pos <> "unexpected index expression on non-array type "
           <> ticks (printLocalType NoPrintMode varT),
         writeContext source pos,
         noteStart pos' <> "variable declared here:",
         writeContext source pos'
       ]
         ++ typeDeclNote
+writeError' source (InvalidIndexType pos actualT expectedT) =
+  [ errorStart pos <> "invalid type " <> ticks (printLocalType NoPrintMode actualT)
+      <> " for index expression (expected "
+      <> ticks (printLocalType NoPrintMode expectedT)
+      <> ")",
+    writeContext source pos
+  ]
+writeError' source (UnexpectedField pos (Ident pos' _) varT typeDeclPos) =
+  let typeDeclNote = case typeDeclPos of
+        (Just tPos) ->
+          [ noteStart tPos <> "type declared here:",
+            writeContext source tPos
+          ]
+        Nothing -> []
+   in [ errorStart pos <> "unexpected field access on non-record type "
+          <> ticks (printLocalType NoPrintMode varT),
+        writeContext source pos,
+        noteStart pos' <> "variable declared here:",
+        writeContext source pos'
+      ]
+        ++ typeDeclNote
+writeError' source (UnknownField (Ident pos field) (Ident varPos _) baseT (Ident typePos _)) =
+  [ errorStart pos <> "unknown field " <> ticks (T.pack field) <> " on type "
+      <> ticks (printLocalType NoPrintMode baseT),
+    writeContext source pos,
+    noteStart varPos <> "variable declared here:",
+    writeContext source varPos,
+    noteStart typePos <> "type declared here:",
+    writeContext source typePos
+  ]
+writeError' source (AliasLoadInValueMode (Ident pos _) (Ident varPos _) t) =
+  [ errorStart pos <> "cannot load alias type " <> ticks (printLocalType NoPrintMode t)
+      <> " in value mode",
+    writeContext source pos,
+    noteStart varPos <> "variable declared here:",
+    writeContext source varPos
+  ]
+writeError' source (AliasWrite pos t) =
+  [ errorStart pos <> "cannot write alias type " <> ticks (printLocalType NoPrintMode t),
+    writeContext source pos
+  ]
 writeError' _ MissingMain =
   ["error: no `main` procedure found"] -- position at end of source
 writeError' source (MainArity pos arity) =

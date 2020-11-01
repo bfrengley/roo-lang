@@ -1,0 +1,16 @@
+record { integer a; integer b } record_t;
+array[2] integer int_arr_t;
+array[2] record_t record_arr_t;
+
+procedure main ()
+    record_t rec;
+    int_arr_t int_arr;
+    record_arr_t rec_arr;
+{
+    rec.b <- 1;
+    writeln rec.a; # valid
+    int_arr[0] <- 1;
+    writeln int_arr[0]; # valid
+    rec_arr[0].b <- 1;
+    writeln rec_arr[0].a; # valid
+}

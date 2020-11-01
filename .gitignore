@@ -2,3 +2,5 @@
 .vscode
 *~
 *.pdf
+examples/*.oz
+

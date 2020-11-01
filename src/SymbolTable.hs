@@ -26,8 +26,10 @@ data ProcSymbol = ProcSymbol Ident [NamedSymbol] deriving (Show, Eq)
 -- | Namespace of Procedures available in a program
 type ProcNS = OMap Text ProcSymbol
 
+data FieldSymbol = FieldSymbol NamedSymbol Int deriving (Show, Eq)
+
 -- | Namespace of fields within a record
-type FieldNS = OMap Text NamedSymbol
+type FieldNS = OMap Text FieldSymbol
 
 data TypeAlias
   = -- | Array types have a name identifier, a fixed size, and an underlying
@@ -78,14 +80,14 @@ lookupProcedure (SymbolTable _ procs _) name = OMap.lookup name procs
 lookupType :: SymbolTable -> Text -> Maybe TypeAlias
 lookupType (SymbolTable types _ _) name = OMap.lookup name types
 
-recordFields :: SymbolTable -> Text -> Maybe [NamedSymbol]
+recordFields :: SymbolTable -> Text -> Maybe [FieldSymbol]
 recordFields table typeName = do
   t <- lookupType table typeName
   case t of
     RecordT _ fieldNS -> Just $ toList fieldNS
     _ -> Nothing
 
-lookupField :: SymbolTable -> Text -> Text -> Maybe NamedSymbol
+lookupField :: SymbolTable -> Text -> Text -> Maybe FieldSymbol
 lookupField table typeName fieldName = do
   t <- lookupType table typeName
   case t of
@@ -114,6 +116,9 @@ instance TypedSymbol NamedSymbol where
 
 instance TypedSymbol LocalSymbol where
   symbolType (LocalSymbol namedSym _ _) = symbolType namedSym
+
+instance TypedSymbol FieldSymbol where
+  symbolType (FieldSymbol namedSym _) = symbolType namedSym
 
 --
 -- Symbol sizes
@@ -160,16 +165,12 @@ buildLocalSymbolTable
         -- underlying monad (in this case, State)
         -- this lets us modify the underlying monad (in this case, we have a State StackSlot and
         -- we want just a State (), so we run the action and discard the slot state)
-        localNS = mapWriterT discardSlotState (populateLocalNS emptyLocalNS)
+        localNS = mapWriterT (discardState 0) (populateLocalNS emptyLocalNS)
      in SymbolTable typeNS procNS <$> localNS
 
 -- We only need the stack slot state internally; when we return a symbol table it doesn't matter
 -- any more. To discard it, we run the state computation (getting back the final value of the
 -- action) and then re-raise it into a unit State monad.
---
--- This feels very dirty but if it works it works..?
-discardSlotState :: State StackSlot a -> State () a
-discardSlotState s1 = return $ evalState s1 0
 
 addParamSymbol :: SymbolTable -> LocalNS -> ProcParam -> SemanticState StackSlot LocalNS
 addParamSymbol table localNS (ProcParam _ t ident) = do
@@ -259,21 +260,31 @@ addRecordSymbol table (RecordDef _ fields ident) =
   buildRecordNS fields >>= addSymbol table . RecordT ident
 
 buildRecordNS :: [FieldDecl] -> SemanticState () FieldNS
-buildRecordNS = foldM updateFieldNS OMap.empty
+buildRecordNS decls =
+  let nsState = foldM updateFieldNS OMap.empty decls
+   in mapWriterT (discardState 0) nsState
 
-updateFieldNS :: FieldNS -> FieldDecl -> SemanticState () FieldNS
+updateFieldNS :: FieldNS -> FieldDecl -> SemanticState Int FieldNS
 updateFieldNS ns field@(FieldDecl _ _ ident) =
   let name = getName ident
    in case OMap.lookup name ns of
-        Just (NamedSymbol ident' _) -> addError (Redefinition ident ident') >> return ns
-        Nothing -> return $ (name, symbolOfField field) |< ns
+        Just (FieldSymbol (NamedSymbol ident' _) _) -> addError (Redefinition ident ident') >> return ns
+        Nothing -> do
+          idx <- nextFieldIndex
+          return $ (name, symbolOfField field idx) |< ns
+
+nextFieldIndex :: SemanticState Int Int
+nextFieldIndex = do
+  idx <- get
+  put $ idx + 1
+  return idx
 
 --
 -- Conversion
 --
 
-symbolOfField :: FieldDecl -> NamedSymbol
-symbolOfField (FieldDecl _ t ident) = NamedSymbol ident (BuiltinT t PassByVal)
+symbolOfField :: FieldDecl -> Int -> FieldSymbol
+symbolOfField (FieldDecl _ t ident) = FieldSymbol (NamedSymbol ident (BuiltinT t PassByVal))
 
 symbolTypeOfArrayType :: ArrayType -> SymbolType
 symbolTypeOfArrayType (ArrBuiltinT t) = BuiltinT t PassByVal
@@ -297,3 +308,8 @@ instance HasIdent NamedSymbol where
 
 instance HasIdent LocalSymbol where
   getIdent (LocalSymbol sym _ _) = getIdent sym
+
+--
+-- This feels very dirty but if it works it works..?
+discardState :: s -> State s a -> State () a
+discardState initialState stateAction = return $ evalState stateAction initialState
