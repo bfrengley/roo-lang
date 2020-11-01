@@ -17,7 +17,7 @@ import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
 import SymbolTable
-import Text.Parsec.Pos (sourceLine)
+import Text.Parsec.Pos (sourceLine, sourceColumn)
 import Util (liftMaybe, (=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
@@ -214,7 +214,7 @@ generateStmtCode table (Roo.SAtom _ (Roo.Call procId paramExprs)) =
       zipWithM_ (\dest source -> writeInstr $ Oz.InstrMove (Oz.Register dest) source) [0 ..] registers
       writeInstr $ Oz.InstrCall (procLabel procId)
 generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) =
-  let ifIdent = "if_ln" ++ show (sourceLine sp)
+  let ifIdent = "if_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
       elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
       endLabel = Oz.Label $ ifIdent ++ "_end"
       evalExpr = compileExpr symbolTable testExpr
@@ -229,7 +229,7 @@ generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts false
         mapM_ (generateStmtCode symbolTable) falseStmts
         writeLabel endLabel
 generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
-  let whileIdent = "while_ln" ++ show (sourceLine sp)
+  let whileIdent = "while_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
       testLabel = Oz.Label $ whileIdent ++ "_test"
       startLabel = Oz.Label $ whileIdent ++ "_start"
       evalExpr = compileExpr symbolTable testExpr
