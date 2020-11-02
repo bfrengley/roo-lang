@@ -50,8 +50,22 @@ compileRooProgram :: Roo.Program -> Either [SemanticError] Oz.Program
 compileRooProgram program =
   let ((_, errors), finalState) = runState (runWriterT $ generateCode program) initialState
    in case errors of
-        [] -> Right $ Oz.Program $ runtimeBoilerplate ++ code finalState
+        [] -> Right $ Oz.Program $ runtimeBoilerplate ++ optimiseStores (code finalState)
         _ -> Left errors
+
+optimiseStores :: [Oz.ProgramLine] -> [Oz.ProgramLine]
+optimiseStores [] = []
+optimiseStores
+  original@( ( Oz.InstructionLine (Oz.InstrLoadAddress r1 slot)
+                 : ( Oz.InstructionLine (Oz.InstrStoreIndirect r2 source)
+                       : rest
+                     )
+               )
+             ) =
+    if r1 == r2
+      then Oz.InstructionLine (Oz.InstrStore slot source) : rest
+      else original
+optimiseStores (line : rest) = line : optimiseStores rest
 
 generateCode :: Roo.Program -> OzState ()
 generateCode prog@(Roo.Program _ _ procs) =
@@ -192,15 +206,13 @@ compileAtomicStmt symbolTable _ (Roo.WriteLn expr) = do
 compileAtomicStmt symbolTable pos (Roo.Read lValue) =
   let lValType = getLvalType symbolTable lValue
    in do
-        dest <- compileLvalLoad Roo.PassByRef symbolTable lValue
         readBuiltin <- case lValType of
           (BuiltinT Roo.TBool _) -> return Oz.BuiltinReadBool
           (BuiltinT Roo.TInt _) -> return Oz.BuiltinReadInt
           t -> addError (InvalidReadType pos t [boolT, intT]) >> failCompile
-        writeInstrs
-          [ Oz.InstrCallBuiltin readBuiltin,
-            Oz.InstrStoreIndirect dest reservedRegister
-          ]
+        writeInstr $ Oz.InstrCallBuiltin readBuiltin
+        dest <- compileLvalLoad Roo.PassByRef symbolTable lValue
+        writeInstr $ Oz.InstrStoreIndirect dest reservedRegister
 compileAtomicStmt table pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr) =
   let exprT = getExprType table expr
       lvalT = getLvalType table lval

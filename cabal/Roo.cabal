@@ -32,7 +32,6 @@ executable Roo
       base >=4.7 && <5
     , containers
     , mtl
-    , ordered-containers
     , parsec
     , text
     , transformers

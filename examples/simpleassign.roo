@@ -3,10 +3,12 @@ array[2] integer int2_t;
 
 procedure main ()
   boolean a;
+  integer int;
   record_t rec, rec2;
   int2_t arr1, arr2;
 {
   a <- true;
+  int <- 0;
   rec.a <- 1;
   rec.b <- true;
   arr1[1] <- 1;
