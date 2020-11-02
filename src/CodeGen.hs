@@ -11,7 +11,7 @@ import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Writer.Strict (mapWriterT, runWriterT)
 import Data.Either (lefts, rights)
 import Data.List
-import qualified Data.Map.Ordered as OMap
+import qualified Data.Map as Map
 import Data.Maybe (fromJust, fromMaybe, isJust, mapMaybe)
 import qualified Data.Text as T
 import qualified OzAST as Oz
@@ -95,9 +95,8 @@ generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ procId@(Roo.Ide
 
 calculateStackSize :: SymbolTable -> Maybe Int
 calculateStackSize table@(SymbolTable _ _ vars) = do
-  paramSizes <- mapM (typeSize table) $ params vars
-  varSizes <- mapM (typeSize table) $ localVars table
-  return $ sum paramSizes + sum varSizes
+  paramSizes <- mapM (typeSize table) $ orderedSymbols vars
+  return $ sum paramSizes
 
 generateArgumentStackSaveInstr :: Oz.Register -> Int -> Oz.Instruction
 generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset =
@@ -456,7 +455,7 @@ compileFieldAccess :: SymbolTable -> Oz.Register -> Roo.Ident -> SymbolType -> M
 compileFieldAccess _ _ _ _ Nothing = return ()
 compileFieldAccess table dest varIdent baseT (Just fieldIdent@(Roo.Ident pos _)) = case baseT of
   AliasT name _ -> case lookupType table name of
-    Just (RecordT typeIdent fields) -> case OMap.lookup (getName fieldIdent) fields of
+    Just (RecordT typeIdent fields) -> case Map.lookup (getName fieldIdent) fields of
       Just (FieldSymbol _ idx) -> do
         reg <- getNextRegister
         writeInstrs
