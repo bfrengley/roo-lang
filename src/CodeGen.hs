@@ -79,7 +79,7 @@ generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ procId@(Roo.Ide
       Just size -> size
       Nothing -> error $ "Stack size calculation for procedure " ++ procName ++ " failed"
     -- can you safely reset registers between statements? I think the answer is yes?
-    compileProcBody = mapM_ (runMaybeT . generateStmtCode symbolTable >=> const resetRegister) statements
+    compileProcBody = mapM_ (runMaybeT . compileStmt symbolTable >=> const resetRegister) statements
     stackSetup =
       if stackSize > 0
         then
@@ -144,35 +144,12 @@ generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbo
           ]
     _ -> error ""
 
-generateStmtCode :: SymbolTable -> Roo.Stmt -> MaybeOzState ()
-generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
-  compileWrite symbolTable expr
-generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) = do
-  compileWrite symbolTable expr
-  writeInstrs
-    [ Oz.InstrStringConst reservedRegister $ Oz.StringConst "\\n",
-      Oz.InstrCallBuiltin Oz.BuiltinPrintString
-    ]
-generateStmtCode symbolTable (Roo.SAtom _ (Roo.Read lValue@(Roo.LValue pos _ _ _))) =
-  let lValType = getLvalType symbolTable lValue
-   in do
-        dest <- compileLvalLoad Roo.PassByRef symbolTable lValue
-        readBuiltin <- case lValType of
-          (BuiltinT Roo.TBool _) -> return Oz.BuiltinReadBool
-          (BuiltinT Roo.TInt _) -> return Oz.BuiltinReadInt
-          t -> addError (InvalidReadType pos t [boolT, intT]) >> failCompile
-        writeInstrs
-          [ Oz.InstrCallBuiltin readBuiltin,
-            Oz.InstrStoreIndirect dest reservedRegister
-          ]
-generateStmtCode table (Roo.SAtom _ (Roo.Call procId paramExprs)) =
-  let (Roo.Ident callsite _) = procId
-   in case lookupProcedure table (getName procId) of
-        Nothing -> addError (UnknownProcedure procId) >> failCompile
-        Just (ProcSymbol declId paramSymbols) -> do
-          lift $ prepareArgs table callsite declId 0 paramSymbols paramExprs
-          writeInstr $ Oz.InstrCall (procLabel procId)
-generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) =
+compileStmt :: SymbolTable -> Roo.Stmt -> MaybeOzState ()
+compileStmt table (Roo.SAtom pos stmt) = compileAtomicStmt table pos stmt
+compileStmt table (Roo.SComp pos stmt) = compileCompStmt table pos stmt
+
+compileCompStmt :: SymbolTable -> SourcePos -> Roo.CompositeStmt -> MaybeOzState ()
+compileCompStmt symbolTable sp (Roo.IfBlock testExpr trueStmts falseStmts) =
   let ifIdent = "if_ln" ++ show (sourceLine sp) ++ "_col" ++ show (sourceColumn sp)
       elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
       endLabel = Oz.Label $ ifIdent ++ "_end"
@@ -184,14 +161,14 @@ generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts false
         writeLabel $ Oz.Label ifIdent -- this isn't necessary (it's not used)
         resultRegister <- lift $ forceCompile reservedRegister evalExpr
         writeInstr $ Oz.InstrBranchOnFalse resultRegister $ if hasElse then elseLabel else endLabel
-        mapM_ (generateStmtCode symbolTable) trueStmts
+        mapM_ (compileStmt symbolTable) trueStmts
         -- only generate an else label + code if we actually have an else body
         when hasElse $ do
           writeInstr (Oz.InstrBranchUnconditional endLabel)
           writeLabel elseLabel
-          mapM_ (generateStmtCode symbolTable) falseStmts
+          mapM_ (compileStmt symbolTable) falseStmts
         writeLabel endLabel
-generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
+compileCompStmt symbolTable sp (Roo.WhileBlock testExpr stmts) =
   let whileIdent = "while_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
       testLabel = Oz.Label $ whileIdent ++ "_test"
       startLabel = Oz.Label $ whileIdent ++ "_start"
@@ -202,11 +179,30 @@ generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
         -- this lets us avoid an unconditional branch every loop
         writeInstr $ Oz.InstrBranchUnconditional testLabel
         writeLabel startLabel
-        mapM_ (generateStmtCode symbolTable) stmts
+        mapM_ (compileStmt symbolTable) stmts
         writeLabel testLabel
         resultRegister <- evalExpr
         writeInstr $ Oz.InstrBranchOnTrue resultRegister startLabel
-generateStmtCode table (Roo.SAtom pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr)) =
+
+compileAtomicStmt :: SymbolTable -> SourcePos -> Roo.AtomicStmt -> MaybeOzState ()
+compileAtomicStmt symbolTable _ (Roo.Write expr) =
+  compileWrite symbolTable expr
+compileAtomicStmt symbolTable _ (Roo.WriteLn expr) = do
+  compileWrite symbolTable expr
+  lift $ writeStringConst "\\n"
+compileAtomicStmt symbolTable pos (Roo.Read lValue) =
+  let lValType = getLvalType symbolTable lValue
+   in do
+        dest <- compileLvalLoad Roo.PassByRef symbolTable lValue
+        readBuiltin <- case lValType of
+          (BuiltinT Roo.TBool _) -> return Oz.BuiltinReadBool
+          (BuiltinT Roo.TInt _) -> return Oz.BuiltinReadInt
+          t -> addError (InvalidReadType pos t [boolT, intT]) >> failCompile
+        writeInstrs
+          [ Oz.InstrCallBuiltin readBuiltin,
+            Oz.InstrStoreIndirect dest reservedRegister
+          ]
+compileAtomicStmt table pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr) =
   let exprT = getExprType table expr
       lvalT = getLvalType table lval
       -- this fromJust should be safe because of laziness
@@ -224,7 +220,13 @@ generateStmtCode table (Roo.SAtom pos (Roo.Assign lval@(Roo.LValue _ varId _ _) 
         -- when (isAliasT lvalT && )
         dest <- compileLvalLoad Roo.PassByRef table lval
         writeInstr $ Oz.InstrStoreIndirect dest source
-generateStmtCode _ stmt = writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)
+compileAtomicStmt table _ (Roo.Call procId paramExprs) =
+  let (Roo.Ident callsite _) = procId
+   in case lookupProcedure table (getName procId) of
+        Nothing -> addError (UnknownProcedure procId) >> failCompile
+        Just (ProcSymbol declId paramSymbols) -> do
+          lift $ prepareArgs table callsite declId 0 paramSymbols paramExprs
+          writeInstr $ Oz.InstrCall (procLabel procId)
 
 prepareArgs ::
   SymbolTable ->
@@ -257,8 +259,7 @@ prepareArgs table callsite declId count (param : paramList) (expr : exprList) =
           Roo.PassByRef -> case expr of
             -- only lvalue expressions can ever be in reference mode, since other expressions don't
             -- have an address
-            Roo.LVal _ lval -> do
-              compileLvalLoad Roo.PassByRef table lval
+            Roo.LVal _ lval -> compileLvalLoad Roo.PassByRef table lval
             _ -> addError typeErr >> failCompile
           Roo.PassByVal -> compileExpr table expr
         whenJust reg $ writeInstr . Oz.InstrMove (Oz.Register count)
@@ -273,9 +274,9 @@ getPassMode (NamedSymbol _ symT) = case symT of
   _ -> Roo.PassByVal
 
 compileWrite :: SymbolTable -> Roo.Expr -> MaybeOzState ()
-compileWrite _ (Roo.ConstBool _ bool) = writeInstrs $ naiveWriteBoolConst bool
-compileWrite _ (Roo.ConstInt _ int) = writeInstrs $ naiveWriteIntegerConst int
-compileWrite _ (Roo.ConstStr _ str) = writeInstrs $ naiveWriteStringConst str
+compileWrite _ (Roo.ConstBool _ bool) = lift $ writeBoolConst bool
+compileWrite _ (Roo.ConstInt _ int) = lift $ writeIntegerConst int
+compileWrite _ (Roo.ConstStr _ str) = lift $ writeStringConst str
 compileWrite table expr =
   let exprT = getExprType table expr
    in do
@@ -423,26 +424,26 @@ checkedLookupVar table ident = case lookupVar table (getName ident) of
   Just v -> return v
   Nothing -> addError (UnknownVar ident) >> failCompile
 
-printNotYetImplemented :: String -> [Oz.Instruction]
-printNotYetImplemented stmntDescription = naiveWriteStringConst (show (stmntDescription ++ " not yet implemented\n"))
+writeBoolConst :: Bool -> OzState ()
+writeBoolConst val =
+  writeInstrs
+    [ Oz.InstrIntConst reservedRegister (Oz.boolConst val),
+      Oz.InstrCallBuiltin Oz.BuiltinPrintBool
+    ]
 
-naiveWriteBoolConst :: Bool -> [Oz.Instruction]
-naiveWriteBoolConst val =
-  [ Oz.InstrIntConst reservedRegister (Oz.boolConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintBool
-  ]
+writeIntegerConst :: Integer -> OzState ()
+writeIntegerConst val =
+  writeInstrs
+    [ Oz.InstrIntConst reservedRegister (Oz.IntegerConst val),
+      Oz.InstrCallBuiltin Oz.BuiltinPrintInt
+    ]
 
-naiveWriteIntegerConst :: Integer -> [Oz.Instruction]
-naiveWriteIntegerConst val =
-  [ Oz.InstrIntConst reservedRegister (Oz.IntegerConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintInt
-  ]
-
-naiveWriteStringConst :: String -> [Oz.Instruction]
-naiveWriteStringConst val =
-  [ Oz.InstrStringConst reservedRegister (Oz.StringConst val),
-    Oz.InstrCallBuiltin Oz.BuiltinPrintString
-  ]
+writeStringConst :: String -> OzState ()
+writeStringConst val =
+  writeInstrs
+    [ Oz.InstrStringConst reservedRegister (Oz.StringConst val),
+      Oz.InstrCallBuiltin Oz.BuiltinPrintString
+    ]
 
 procLabel :: Roo.Ident -> Oz.Label
 procLabel (Roo.Ident _ name) = Oz.Label ("proc_" ++ name)

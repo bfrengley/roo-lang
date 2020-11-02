@@ -6,7 +6,7 @@
 PROXY=proxy.unimelb.edu.au:8000
 BINPATH=.
 
-build: Roo.hs Parser.hs AST.hs PrettyPrint.hs
+build: *.hs
 	http_proxy=$(PROXY) https_proxy=$(PROXY) cabal build && \
 	cp "$$(find . -type f -path './dist*' -name 'Roo')" $(BINPATH)
 
@@ -16,5 +16,5 @@ Roo: build
 .PHONY: clean
 
 clean:
-	rm $(BINPATH)/Roo
+	rm -rf ./dist* && rm $(BINPATH)/Roo
 
