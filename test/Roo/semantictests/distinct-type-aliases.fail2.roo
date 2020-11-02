@@ -1,0 +1,10 @@
+array[80] integer buf80;
+array[80] integer buf80;
+array[80] integer buf80;
+array[80] integer buf80;
+array[80] integer buf80;
+
+procedure main ()
+{
+    writeln "Hello, world!";
+}
