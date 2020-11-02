@@ -27,11 +27,18 @@ spec = do
     -- prettyPrintTestCode = "blah blah blah blah"
     simpleTestAst =
       Program
-        [ InstrCall (Label "proc_main"),
-          InstrHalt
+        $ concat [
+          prologue,
+          mainProc
         ]
-        [ LabelledBlock
-            (Label "proc_main")
+    prologue = map InstructionLine
+                [ InstrCall (Label "proc_main"),
+                  InstrHalt
+                ]
+    mainProc =
+        [ LabelLine (Label "proc_main") ]
+        ++
+        map InstructionLine
             [ InstrPushStackFrame (Framesize 3),
               InstrIntConst (Register 0) (IntegerConst 0),
               InstrStore (StackSlot 0) (Register 0),
@@ -50,4 +57,3 @@ spec = do
               InstrPopStackFrame (Framesize 3),
               InstrReturn
             ]
-        ]
