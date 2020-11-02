@@ -1,0 +1,17 @@
+record { integer a; integer b } funkymonkey;
+array[80] integer funkymonkey;
+
+procedure main ()
+{
+    call funkymonkey();
+}
+
+procedure funkymonkey ()
+{
+    writeln "Hey there, funky monkey";
+}
+
+procedure funkymonkey ()
+{
+    writeln "Hey there, funkier monkey";
+}

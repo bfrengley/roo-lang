@@ -1,0 +1,12 @@
+procedure main ()
+    integer result;
+{
+    call proc(result);
+}
+
+procedure proc (integer n)
+{
+    writeln "Hello from Procedure";
+    write "Integer arg is: ";
+    writeln n;
+}

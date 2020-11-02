@@ -1,0 +1,14 @@
+array[5] integer buf5;
+
+procedure main ()
+    buf5 result;
+{
+    call proc(result);
+}
+
+procedure proc (buf5 n)
+    buf5 inner;
+{
+    writeln "Hello from Procedure";
+    inner <- n;
+}

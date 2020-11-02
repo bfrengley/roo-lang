@@ -1,0 +1,11 @@
+procedure main ()
+{
+    call proc(2);
+}
+
+procedure proc (integer n)
+{
+    writeln "Hello from Procedure";
+    write "Integer arg is: ";
+    writeln n;
+}

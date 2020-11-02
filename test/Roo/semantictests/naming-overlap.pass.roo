@@ -1,0 +1,11 @@
+array[80] integer funkymonkey;
+
+procedure main ()
+{
+    call funkymonkey();
+}
+
+procedure funkymonkey ()
+{
+    writeln "Hey there, funky monkey";
+}

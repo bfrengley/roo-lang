@@ -1,0 +1,19 @@
+procedure main ()
+    integer result;
+    boolean result2;
+{
+    call proc(result, result2, 1, true);
+}
+
+procedure proc (integer n, boolean x, integer val m, boolean val y)
+{
+    writeln "Hello from Procedure";
+    write "Integer ref arg is: ";
+    writeln n;
+    write "Boolean ref arg is: ";
+    writeln x;
+    write "Integer val arg is: ";
+    writeln m;
+    write "Boolean val arg is: ";
+    writeln y;
+}
