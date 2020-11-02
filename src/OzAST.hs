@@ -44,11 +44,11 @@ newtype Label = Label String deriving (Show, Eq)
 instance OzShow Label where
   ozShow (Label s) = s
 
-data Program = Program [ProgramLine]
+data Program = Program [ProgramLine] deriving (Show)
 
 -- deriving (Eq, Show)
 
-data ProgramLine = InstructionLine Instruction | LabelLine Label
+data ProgramLine = InstructionLine Instruction | LabelLine Label deriving (Show)
 
 data LabelledBlock = LabelledBlock Label [Instruction]
 
@@ -114,6 +114,7 @@ data Instruction
   | InstrDebugRegister Register
   | InstrDebugSlot StackSlot
   | InstrDebugStack
+  deriving (Show)
 
 data BuiltinFunction
   = BuiltinReadInt
@@ -123,6 +124,7 @@ data BuiltinFunction
   | -- BuiltinPrintReal
     BuiltinPrintBool
   | BuiltinPrintString
+  deriving (Show)
 
 instance OzShow BuiltinFunction where
   ozShow BuiltinReadInt = "read_int"
