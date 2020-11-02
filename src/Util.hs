@@ -1,6 +1,7 @@
 module Util where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, (>=>))
+import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
 
 -- | The 'Equivalent' class defines the concept of "loose" equality, as opposed to the strict
@@ -26,3 +27,7 @@ liftMaybe = MaybeT . return
 -- a 'Maybe' isn't very intuitive --- it should get inlined by GHC.
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenJust = forM_
+
+-- | Lifts a 'Maybe b' inside a monad 'm' into a 'MaybeT m b'.
+liftToMaybeT :: Monad m => m (Maybe b) -> MaybeT m b
+liftToMaybeT = lift >=> liftMaybe

@@ -1,15 +1,36 @@
-record { integer a; boolean b } record_t;
+record { integer a; boolean b; boolean c } record_t;
 array[2] integer int2_t;
 
 procedure main ()
   boolean a;
-  record_t rec;
-  int2_t int_arr;
+  record_t rec, rec2;
+  int2_t arr1, arr2;
 {
   a <- true;
   rec.a <- 1;
   rec.b <- true;
-  int_arr[1] <- 1;
+  arr1[1] <- 1;
 
-  writeln int_arr[1];
+  call foo(arr2, arr1);
+  call bar(rec2, rec);
+
+  writeln arr2[1];
+  writeln rec2.b;
+}
+
+procedure foo (int2_t arr1, int2_t arr2)
+  int2_t local_arr;
+{
+  arr1 <- arr2; # valid
+  #local_arr <- arr1; # invalid
+  #arr1 <- local_arr; # invalid
+}
+
+
+procedure bar (record_t rec1, record_t rec2)
+  record_t local_rec;
+{
+  rec1 <- rec2; # valid
+  #local_rec <- rec1; # invalid
+  #rec1 <- local_rec; # invalid
 }

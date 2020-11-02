@@ -231,7 +231,8 @@ data PrintTypeOpt = PrintMode | NoPrintMode deriving (Eq)
 printLocalType :: PrintTypeOpt -> SymbolType -> Text
 printLocalType _ StringT = "string"
 printLocalType _ UnknownT = "unknown" -- ???
-printLocalType _ (AliasT name _) = name
+printLocalType NoPrintMode (AliasT name _) = name
+printLocalType PrintMode (AliasT name mode) = T.unwords [name, printPassMode mode]
 printLocalType NoPrintMode (BuiltinT t _) = pPrintBuiltinType t
 printLocalType PrintMode (BuiltinT t mode) = T.unwords [pPrintBuiltinType t, printPassMode mode]
 

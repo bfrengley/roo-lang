@@ -19,7 +19,7 @@ import Semantics
 import SymbolTable
 import Text.Parsec (SourcePos)
 import Text.Parsec.Pos (sourceColumn, sourceLine)
-import Util (liftMaybe, whenJust, (=%=))
+import Util (liftMaybe, liftToMaybeT, whenJust, (=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
 
@@ -218,12 +218,10 @@ compileAtomicStmt table pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr) =
           then do
             when (exprT /= UnknownT && lvalT /= exprT) $ addError assignError
             case expr of
-              Roo.LVal _ sourceLval -> compileAliasTypeCopy table lval sourceLval
-          else -- _ -> compileE
-          do
-            source <- compileExpr table expr
-            dest <- compileLvalLoad Roo.PassByRef table lval
-            writeInstr $ Oz.InstrStoreIndirect dest source
+              Roo.LVal _ sourceLval -> compileAliasTypeAssign table lval sourceLval
+              -- invalid, but compile it anyway to check the lvalue/expression semantics
+              _ -> compileExprAssign table lval expr >> failCompile
+          else compileExprAssign table lval expr
 compileAtomicStmt table _ (Roo.Call procId paramExprs) =
   let (Roo.Ident callsite _) = procId
    in case lookupProcedure table (getName procId) of
@@ -277,8 +275,53 @@ getPassMode (NamedSymbol _ symT) = case symT of
   -- just pretend like we have a real mode, I don't think it matters (for now)
   _ -> Roo.PassByVal
 
-compileAliasTypeCopy :: SymbolTable -> Roo.LValue -> Roo.LValue -> MaybeOzState ()
-compileAliasTypeCopy table destT sourceT = failCompile
+compileExprAssign :: SymbolTable -> Roo.LValue -> Roo.Expr -> MaybeOzState ()
+compileExprAssign table lval expr = do
+  -- compile both sides without bailing on failure (yet) to record errors
+  let maybeDest = runMaybeT $ compileLvalLoad Roo.PassByRef table lval
+  let maybeSource = runMaybeT $ compileExpr table expr
+  source <- liftToMaybeT maybeSource
+  dest <- liftToMaybeT maybeDest
+  writeInstr $ Oz.InstrStoreIndirect dest source
+
+compileAliasTypeAssign :: SymbolTable -> Roo.LValue -> Roo.LValue -> MaybeOzState ()
+compileAliasTypeAssign table destLval sourceLval =
+  let -- extract the underlying alias type which the lvalue is a reference to so we can get its size
+      extractBaseAliasType lval = case getLvalType table lval of
+        AliasT name _ -> Just $ AliasT name Roo.PassByVal
+        _ -> Nothing
+      sourceSize = extractBaseAliasType sourceLval >>= typeSize table
+      destSize = extractBaseAliasType destLval >>= typeSize table
+   in do
+        let maybeDest = runMaybeT $ compileLvalLoad Roo.PassByRef table destLval
+        let maybeSource = runMaybeT $ compileLvalLoad Roo.PassByRef table sourceLval
+        dest <- liftToMaybeT maybeDest
+        source <- liftToMaybeT maybeSource
+        -- remap the types to the underlying types
+        sourceSize' <- liftMaybe sourceSize
+        destSize' <- liftMaybe destSize
+        if sourceSize' /= destSize'
+          then failCompile
+          else do
+            incrReg <- getNextRegister
+            copyReg <- getNextRegister
+            -- explicitly write the first load and the write the rest via a loop
+            -- this lets us avoid two extra sub_offsets
+            writeInstrs
+              [ Oz.InstrIntConst incrReg $ Oz.IntegerConst 1,
+                Oz.InstrLoadIndirect copyReg source,
+                Oz.InstrStoreIndirect dest copyReg
+              ]
+            mapM_
+              ( \_ ->
+                  writeInstrs
+                    [ Oz.InstrSubOffset source source incrReg,
+                      Oz.InstrSubOffset dest dest incrReg,
+                      Oz.InstrLoadIndirect copyReg source,
+                      Oz.InstrStoreIndirect dest copyReg
+                    ]
+              )
+              [1 .. sourceSize' - 1]
 
 compileWrite :: SymbolTable -> Roo.Expr -> MaybeOzState ()
 compileWrite _ (Roo.ConstBool _ bool) = lift $ writeBoolConst bool
@@ -330,8 +373,8 @@ compileExpr table (Roo.BinOpExpr pos op left right) = do
   -- for the left hand side
   let leftReg = runMaybeT $ compileExpr table left
   let rightReg = runMaybeT $ compileExpr table right
-  leftReg' <- lift leftReg >>= liftMaybe
-  rightReg' <- lift rightReg >>= liftMaybe
+  leftReg' <- liftToMaybeT leftReg
+  rightReg' <- liftToMaybeT rightReg
   dest <- getNextRegister
   writeInstr $ binOpInstruction op dest leftReg' rightReg'
   return dest
