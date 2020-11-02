@@ -54,4 +54,5 @@ tests:
     dependencies:
     - roo-lang
     - hspec
+    - directory
     - paths

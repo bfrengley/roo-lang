@@ -1,0 +1,8 @@
+record { integer a; integer b } sharedName;
+array[80] integer sharedName;
+
+
+procedure main ()
+{
+    writeln "Hello, world!";
+}
