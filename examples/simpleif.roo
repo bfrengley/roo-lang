@@ -1,0 +1,11 @@
+procedure main () {
+  if true then
+    writeln "true";
+  else
+    writeln "false";
+  fi
+
+  if true then
+    writeln "true";
+  fi
+}

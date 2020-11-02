@@ -173,19 +173,23 @@ generateStmtCode table (Roo.SAtom _ (Roo.Call procId paramExprs)) =
           lift $ prepareArgs table callsite declId 0 paramSymbols paramExprs
           writeInstr $ Oz.InstrCall (procLabel procId)
 generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) =
-  let ifIdent = "if_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
+  let ifIdent = "if_ln" ++ show (sourceLine sp) ++ "_col" ++ show (sourceColumn sp)
       elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
       endLabel = Oz.Label $ ifIdent ++ "_end"
       evalExpr = compileExpr symbolTable testExpr
+      hasElse = not $ null falseStmts
    in do
         -- force execution to continue with a dummy register even if compiling the expression fails
         -- we'll rely on an error having been written to catch it later
+        writeLabel $ Oz.Label ifIdent -- this isn't necessary (it's not used)
         resultRegister <- lift $ forceCompile reservedRegister evalExpr
-        writeInstr $ Oz.InstrBranchOnFalse resultRegister elseLabel
+        writeInstr $ Oz.InstrBranchOnFalse resultRegister $ if hasElse then elseLabel else endLabel
         mapM_ (generateStmtCode symbolTable) trueStmts
-        writeInstr $ Oz.InstrBranchUnconditional endLabel
-        writeLabel elseLabel
-        mapM_ (generateStmtCode symbolTable) falseStmts
+        -- only generate an else label + code if we actually have an else body
+        when hasElse $ do
+          writeInstr (Oz.InstrBranchUnconditional endLabel)
+          writeLabel elseLabel
+          mapM_ (generateStmtCode symbolTable) falseStmts
         writeLabel endLabel
 generateStmtCode symbolTable (Roo.SComp sp (Roo.WhileBlock testExpr stmts)) =
   let whileIdent = "while_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
@@ -394,7 +398,6 @@ compileIndexExpr table dest varIdent (Just expr) =
             )
         lift $ expectType intT (InvalidIndexType pos) $ getExprType table expr
         offsetReg <- compileExpr table expr
-        -- is sub correct?
         writeInstr $ Oz.InstrSubOffset dest dest offsetReg
         return elemT
 
