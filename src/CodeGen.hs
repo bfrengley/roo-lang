@@ -12,13 +12,14 @@ import Control.Monad.Trans.Writer.Strict (mapWriterT, runWriterT)
 import Data.Either (lefts, rights)
 import Data.List
 import qualified Data.Map.Ordered as OMap
-import Data.Maybe (fromJust, fromMaybe, mapMaybe)
+import Data.Maybe (fromJust, fromMaybe, isJust, mapMaybe)
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
 import SymbolTable
-import Text.Parsec.Pos (sourceLine, sourceColumn)
-import Util (liftMaybe, (=%=))
+import Text.Parsec (SourcePos)
+import Text.Parsec.Pos (sourceColumn, sourceLine)
+import Util (liftMaybe, whenJust, (=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
 
@@ -145,88 +146,32 @@ generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbo
 
 generateStmtCode :: SymbolTable -> Roo.Stmt -> MaybeOzState ()
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.Write expr)) =
-  generateWriteStmtCode symbolTable expr
+  compileWrite symbolTable expr
 generateStmtCode symbolTable (Roo.SAtom _ (Roo.WriteLn expr)) = do
-  generateWriteStmtCode symbolTable expr
+  compileWrite symbolTable expr
   writeInstrs
     [ Oz.InstrStringConst reservedRegister $ Oz.StringConst "\\n",
       Oz.InstrCallBuiltin Oz.BuiltinPrintString
     ]
-generateStmtCode symbolTable stmt@(Roo.SAtom _ (Roo.Read lValue)) = do
+generateStmtCode symbolTable (Roo.SAtom _ (Roo.Read lValue@(Roo.LValue pos _ _ _))) =
   let lValType = getLvalType symbolTable lValue
-      readBuiltin =  case lValType of
-        (BuiltinT Roo.TBool passMode) -> Oz.BuiltinReadBool
-        (BuiltinT Roo.TInt passMode) -> Oz.BuiltinReadInt
-        -- AliasT aliasIdent passMode
-        -- StringT
-        -- UnknownT
-  writeInstrs
-    [ Oz.InstrCallBuiltin readBuiltin
-    ]
-  -- TODO: result is in r0. Need to save into LValue
-  writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)  -- return ()
-
+   in do
+        dest <- compileLvalLoad Roo.PassByRef symbolTable lValue
+        readBuiltin <- case lValType of
+          (BuiltinT Roo.TBool _) -> return Oz.BuiltinReadBool
+          (BuiltinT Roo.TInt _) -> return Oz.BuiltinReadInt
+          t -> addError (InvalidReadType pos t [boolT, intT]) >> failCompile
+        writeInstrs
+          [ Oz.InstrCallBuiltin readBuiltin,
+            Oz.InstrStoreIndirect dest reservedRegister
+          ]
 generateStmtCode table (Roo.SAtom _ (Roo.Call procId paramExprs)) =
-  -- let (ProcSymbol _ paramSymbols) = case lookupProcedure symbolTable (T.pack procIdent) of
-  --       Just sym -> sym
-  --       Nothing -> error $ "couldn't find proc with ident " ++ procIdent ++ " in symbol table???"
-  --     procArgPassTypes =
-  --       map
-  --         ( \(NamedSymbol paramIdent paramType) -> case paramType of
-  --             (AliasT _ passMode) -> passMode
-  --             (BuiltinT _ passMode) -> passMode
-  --             _ -> error $ "type " ++ show paramType ++ " can't be used as argument for param " ++ show paramIdent
-  --         )
-  --         paramSymbols
-  -- paramSources <-
-  --   mapM
-  --     ( \(expr, passType) -> case passType of
-  --         -- For PassByRef params the LValue is needed
-  --         Roo.PassByRef -> case expr of
-  --           Roo.LVal _ lValue -> do
-  --             return $ Right lValue
-  --           _ -> error $ "invalid expr " ++ show expr ++ " for PassByRef param"
-  --         -- For PassByVal params, the expression must be evaluated
-  --         Roo.PassByVal -> do
-  --           exprEvalCode <- generateExpEvalCode expr symbolTable
-  --           return $ Left exprEvalCode
-  --     )
-  --     (zip paramExprs procArgPassTypes)
-  -- let paramExprCalculationInstrs = map fst (lefts paramSources)
-  --     argPrepStsmts =
-  --       map
-  --         ( \(paramSource, procParamIndex) ->
-  --             let destRegister = (Oz.Register procParamIndex)
-  --              in case paramSource of
-  --                   Left (_, reg) -> Oz.InstrMove destRegister reg
-  --                   Right _ -> Oz.InstrLoadAddress destRegister (Oz.StackSlot 0) -- XXX: todo! lValue stack slot lookup...
-  --         )
-  --         (zip paramSources [0 ..])
-  --     stmts = (concat paramExprCalculationInstrs) ++ argPrepStsmts ++ [Oz.InstrCall (Oz.Label procIdent)]
-  -- writeInstrs stmts
-  case lookupProcedure table (getName procId) of
-    Nothing -> addError (UnknownProcedure procId) >> failCompile
-    Just (ProcSymbol _ paramSymbols) -> do
-      when (length paramExprs /= length paramSymbols) $ addError ArgumentCountMismatch -- TODO
-      registers <-
-        zipWithM
-          ( \param expr -> case getPassMode param of
-              Roo.PassByRef -> case expr of
-                -- only lvalue expressions can ever be in reference mode, since other expressions don't
-                -- have an address
-                Roo.LVal _ lval -> do
-                  -- TODO type check
-                  compileLvalLoad Roo.PassByRef table lval
-                -- can't failCompile here, needs lifted out or we exit early
-                _ -> addError ArgumentTypeMismatch >> failCompile
-              Roo.PassByVal -> do
-                unless (symbolType param =%= getExprType table expr) $ addError ArgumentTypeMismatch
-                compileExpr table expr
-          )
-          paramSymbols
-          paramExprs
-      zipWithM_ (\dest source -> writeInstr $ Oz.InstrMove (Oz.Register dest) source) [0 ..] registers
-      writeInstr $ Oz.InstrCall (procLabel procId)
+  let (Roo.Ident callsite _) = procId
+   in case lookupProcedure table (getName procId) of
+        Nothing -> addError (UnknownProcedure procId) >> failCompile
+        Just (ProcSymbol declId paramSymbols) -> do
+          lift $ prepareArgs table callsite declId 0 paramSymbols paramExprs
+          writeInstr $ Oz.InstrCall (procLabel procId)
 generateStmtCode symbolTable (Roo.SComp sp (Roo.IfBlock testExpr trueStmts falseStmts)) =
   let ifIdent = "if_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
       elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
@@ -277,6 +222,44 @@ generateStmtCode table (Roo.SAtom pos (Roo.Assign lval@(Roo.LValue _ varId _ _) 
         writeInstr $ Oz.InstrStoreIndirect dest source
 generateStmtCode _ stmt = writeInstrs (printNotYetImplemented $ "Statement type " ++ show stmt)
 
+prepareArgs ::
+  SymbolTable ->
+  -- The callsite (the source position at which the procedure call appears), for error messages
+  SourcePos ->
+  -- The Ident from the procedure declaration, for error messages
+  Roo.Ident ->
+  -- The cumulative count of handled args, for argument count mismatch errors
+  Int ->
+  -- The list of parameter symbols
+  [NamedSymbol] ->
+  -- The list of expressions supplied at the callsite
+  [Roo.Expr] ->
+  -- A list of registers in which each argument is stored
+  OzState ()
+prepareArgs _ _ _ _ [] [] = return () -- base case for matching arg count
+prepareArgs _ callsite declId count [] exprList =
+  -- more args than params
+  addError (ArgumentCountMismatch callsite declId (count + length exprList) count)
+prepareArgs _ callsite declId count paramList [] =
+  -- more params than args
+  addError (ArgumentCountMismatch callsite declId count (count + length paramList))
+prepareArgs table callsite declId count (param : paramList) (expr : exprList) =
+  let paramT = symbolType param
+      exprT = getExprType table expr
+      typeErr = ArgumentTypeMismatch (Roo.exprStart expr) (getIdent param) exprT paramT
+   in do
+        unless (paramT =%= exprT) $ addError typeErr
+        reg <- runMaybeT $ case getPassMode param of
+          Roo.PassByRef -> case expr of
+            -- only lvalue expressions can ever be in reference mode, since other expressions don't
+            -- have an address
+            Roo.LVal _ lval -> do
+              compileLvalLoad Roo.PassByRef table lval
+            _ -> addError typeErr >> failCompile
+          Roo.PassByVal -> compileExpr table expr
+        whenJust reg $ writeInstr . Oz.InstrMove (Oz.Register count)
+        prepareArgs table callsite declId (count + 1) paramList exprList
+
 getPassMode :: NamedSymbol -> Roo.ProcParamPassMode
 getPassMode (NamedSymbol _ symT) = case symT of
   AliasT _ mode -> mode
@@ -285,14 +268,11 @@ getPassMode (NamedSymbol _ symT) = case symT of
   -- just pretend like we have a real mode, I don't think it matters (for now)
   _ -> Roo.PassByVal
 
-forceCompile :: Monad m => a -> MaybeT m a -> m a
-forceCompile defaultVal action = fromMaybe defaultVal <$> runMaybeT action
-
-generateWriteStmtCode :: SymbolTable -> Roo.Expr -> MaybeOzState ()
-generateWriteStmtCode _ (Roo.ConstBool _ bool) = writeInstrs $ naiveWriteBoolConst bool
-generateWriteStmtCode _ (Roo.ConstInt _ int) = writeInstrs $ naiveWriteIntegerConst int
-generateWriteStmtCode _ (Roo.ConstStr _ str) = writeInstrs $ naiveWriteStringConst str
-generateWriteStmtCode table expr =
+compileWrite :: SymbolTable -> Roo.Expr -> MaybeOzState ()
+compileWrite _ (Roo.ConstBool _ bool) = writeInstrs $ naiveWriteBoolConst bool
+compileWrite _ (Roo.ConstInt _ int) = writeInstrs $ naiveWriteIntegerConst int
+compileWrite _ (Roo.ConstStr _ str) = writeInstrs $ naiveWriteStringConst str
+compileWrite table expr =
   let exprT = getExprType table expr
    in do
         when (isAliasT exprT) $ addError (AliasWrite (Roo.exprStart expr) exprT)
@@ -519,3 +499,6 @@ writeInstrs instrs = modify (\st -> st {code = code st ++ map Oz.InstructionLine
 
 writeLabel :: MonadState OzStateVal m => Oz.Label -> m ()
 writeLabel label = modify (\st -> st {code = code st ++ [Oz.LabelLine label]})
+
+forceCompile :: Monad m => a -> MaybeT m a -> m a
+forceCompile defaultVal action = fromMaybe defaultVal <$> runMaybeT action

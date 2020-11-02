@@ -31,8 +31,9 @@ data SemanticError
   | UnknownType Ident
   | UnknownVar Ident
   | UnknownProcedure Ident
-  | ArgumentCountMismatch -- TODO
-  | ArgumentTypeMismatch -- TODO
+  | ArgumentCountMismatch SourcePos Ident Int Int
+  | ArgumentTypeMismatch SourcePos Ident SymbolType SymbolType
+  | InvalidReadType SourcePos SymbolType [SymbolType]
   | InvalidArrayType Ident Ident
   | InvalidUnaryType SourcePos UnaryOp SymbolType SymbolType
   | InvalidBinaryType SourcePos BinaryOp SymbolType [SymbolType]
@@ -113,6 +114,13 @@ writeError' source (BinaryTypeMismatch pos op left right) =
       <> ticks (printLocalType NoPrintMode right),
     writeContext source pos
   ]
+writeError' source (InvalidReadType pos actual expected) =
+  [ errorStart pos <> "cannot read value of type " <> ticks (printLocalType NoPrintMode actual)
+      <> " (expected "
+      <> writeExpectedTypes NoPrintMode expected
+      <> ")",
+    writeContext source pos
+  ]
 writeError' source (InvalidAssign pos (Ident pos' _) varT exprT) =
   [ errorStart pos <> "cannot assign value of type "
       <> ticks (printLocalType PrintMode exprT)
@@ -177,6 +185,28 @@ writeError' source (AliasWrite pos t) =
   [ errorStart pos <> "cannot write alias type " <> ticks (printLocalType NoPrintMode t),
     writeContext source pos
   ]
+writeError' source (ArgumentCountMismatch callPos (Ident procPos procId) found expected) =
+  [ errorStart callPos <> "incorrect number of arguments provided for call to procedure "
+      <> ticks (T.pack procId)
+      <> " (expected "
+      <> showT expected
+      <> ", found "
+      <> showT found
+      <> ")",
+    writeContext source callPos,
+    noteStart procPos <> "procedure declared here:",
+    writeContext source procPos
+  ]
+writeError' source (ArgumentTypeMismatch argPos (Ident paramPos _) found expected) =
+  [ errorStart argPos <> "invalid argument type "
+      <> ticks (printLocalType PrintMode found)
+      <> " (expected "
+      <> ticks (printLocalType PrintMode expected)
+      <> ")",
+    writeContext source argPos,
+    noteStart paramPos <> "parameter declared here:",
+    writeContext source paramPos
+  ]
 writeError' _ MissingMain =
   ["error: no `main` procedure found"] -- position at end of source
 writeError' source (MainArity pos arity) =
@@ -201,14 +231,13 @@ data PrintTypeOpt = PrintMode | NoPrintMode deriving (Eq)
 printLocalType :: PrintTypeOpt -> SymbolType -> Text
 printLocalType _ StringT = "string"
 printLocalType _ UnknownT = "unknown" -- ???
-printLocalType NoPrintMode (AliasT name _) = name
-printLocalType PrintMode (AliasT name mode) = T.unwords [name, printPassMode mode]
+printLocalType _ (AliasT name _) = name
 printLocalType NoPrintMode (BuiltinT t _) = pPrintBuiltinType t
 printLocalType PrintMode (BuiltinT t mode) = T.unwords [pPrintBuiltinType t, printPassMode mode]
 
 printPassMode :: ProcParamPassMode -> Text
-printPassMode PassByRef = "reference"
-printPassMode PassByVal = "value"
+printPassMode PassByRef = "ref"
+printPassMode PassByVal = "val"
 
 writePos :: SourcePos -> Text
 writePos pos =

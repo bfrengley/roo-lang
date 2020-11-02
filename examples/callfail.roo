@@ -1,0 +1,17 @@
+record { integer a; integer b } record_t;
+array[2] integer int2_t;
+
+procedure main ()
+  record_t rec;
+  int2_t arr;
+  integer i;
+  boolean b;
+{
+  call foo(arr);
+  call foo(rec, arr, i, b);
+  call foo(rec, arr, arr[0], true);
+}
+
+procedure foo (record_t rec, int2_t arr, integer val i, boolean b) {
+    b <- false;
+}

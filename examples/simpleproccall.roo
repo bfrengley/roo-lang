@@ -4,6 +4,8 @@ procedure main ()
     boolean result;
 {
     call proc(42, result);
+    write "result in main is: ";
+    writeln result;
 }
 
 procedure proc (integer val n, boolean b)
@@ -15,12 +17,17 @@ procedure proc (integer val n, boolean b)
     writeln n;
     write "Boolean arg is: ";
     writeln b;
-    write "Local int is";
+    write "Local int is: ";
     writeln local;
-    write "Local array[5] vals are:";
+    write "Local array[5] vals are: ";
     write localBuf[0];
+    write ", ";
     write localBuf[1];
+    write ", ";
     write localBuf[2];
+    write ", ";
     write localBuf[3];
+    write ", ";
     writeln localBuf[4];
+    b <- true;
 }

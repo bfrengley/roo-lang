@@ -1,5 +1,6 @@
 module Util where
 
+import Control.Monad (forM_)
 import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
 
 -- | The 'Equivalent' class defines the concept of "loose" equality, as opposed to the strict
@@ -11,7 +12,7 @@ import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
 class Equivalent a where
   (=%=) :: a -> a -> Bool
 
-(=>>) :: Monad m => m b -> (b -> m a) -> m b
+(=>>) :: Monad m => m b -> (b -> m ()) -> m b
 a =>> f = do
   val <- a
   f val
@@ -19,3 +20,9 @@ a =>> f = do
 
 liftMaybe :: (Monad m) => Maybe a -> MaybeT m a
 liftMaybe = MaybeT . return
+
+-- | Execute a monad action on the contents of a 'Maybe a' if it contains a value; otherwise do
+-- nothing. This is just an alias to make it more clear what's actually happening, since folding
+-- a 'Maybe' isn't very intuitive --- it should get inlined by GHC.
+whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
+whenJust = forM_

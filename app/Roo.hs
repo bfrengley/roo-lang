@@ -59,9 +59,10 @@ main =
                 case compileRooProgram ast of
                   Right compiledProgram ->
                     putStrLn . T.unpack $ writeProgram compiledProgram
-                  Left errors ->
+                  Left errors -> do
                     -- semantic errors found, print them out
                     mapM_ (putStrLn . T.unpack . writeError (lines inputRooSource)) errors
+                    exitWith (ExitFailure 2)
           -- Parse error
           Left err -> do
             putStr "Parse error at "
