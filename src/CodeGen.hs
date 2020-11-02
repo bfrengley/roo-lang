@@ -207,19 +207,23 @@ compileAtomicStmt table pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr) =
       lvalT = getLvalType table lval
       -- this fromJust should be safe because of laziness
       -- if the var doesn't exist its type is UnknownT and the unless condition in the first error
-      -- will be true, because UnknownT is equal to any type, so it won't be evaluated
-      -- the when condition can never be true when the var doesn't exist because `isAliasT UnknownT`
-      -- is false, so it can't be evaluated there if it would fail
+      -- will be true because UnknownT is equal to any type, so it won't be evaluated
+      -- the when will never be reached when the var doesn't exist because `isAliasT UnknownT`
+      -- is false
       varDecl = getIdent $ fromJust $ lookupVar table $ getName varId
       assignError = InvalidAssign pos varDecl lvalT exprT
    in do
         unless (exprT =%= lvalT) $ addError assignError
-        when (isAliasT lvalT && exprT /= UnknownT && lvalT /= exprT) $ addError assignError
-        source <- compileExpr table expr
-        -- check that reference type lvalues are in reference mode
-        -- when (isAliasT lvalT && )
-        dest <- compileLvalLoad Roo.PassByRef table lval
-        writeInstr $ Oz.InstrStoreIndirect dest source
+        if isAliasT lvalT
+          then do
+            when (exprT /= UnknownT && lvalT /= exprT) $ addError assignError
+            case expr of
+              Roo.LVal _ sourceLval -> compileAliasTypeCopy table lval sourceLval
+          else -- _ -> compileE
+          do
+            source <- compileExpr table expr
+            dest <- compileLvalLoad Roo.PassByRef table lval
+            writeInstr $ Oz.InstrStoreIndirect dest source
 compileAtomicStmt table _ (Roo.Call procId paramExprs) =
   let (Roo.Ident callsite _) = procId
    in case lookupProcedure table (getName procId) of
@@ -272,6 +276,9 @@ getPassMode (NamedSymbol _ symT) = case symT of
   -- don't print an error here - we should have caught it when building the symbol table
   -- just pretend like we have a real mode, I don't think it matters (for now)
   _ -> Roo.PassByVal
+
+compileAliasTypeCopy :: SymbolTable -> Roo.LValue -> Roo.LValue -> MaybeOzState ()
+compileAliasTypeCopy table destT sourceT = failCompile
 
 compileWrite :: SymbolTable -> Roo.Expr -> MaybeOzState ()
 compileWrite _ (Roo.ConstBool _ bool) = lift $ writeBoolConst bool
