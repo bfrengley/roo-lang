@@ -4,8 +4,6 @@ module Analysis where
 
 import AST
 import Control.Monad
-import Control.Monad.State.Strict (evalState)
-import Control.Monad.Trans.Writer.Strict (runWriterT)
 import Data.Maybe (fromMaybe)
 import Semantics
 import SymbolTable
@@ -31,19 +29,24 @@ narrowArrayType :: SymbolTable -> Maybe Expr -> SymbolType -> Maybe SymbolType
 -- if we have no index expression, then we don't need to narrow it
 narrowArrayType _ Nothing baseT = Just baseT
 -- if we have an index expression, it's only valid where the underlying type is an alias type
-narrowArrayType table (Just _) (AliasT typeName _) = do
+narrowArrayType table (Just _) (AliasT typeName mode) = do
   innerT <- lookupType table typeName
   -- only aliases of an array type make sense to have an index expression
   case innerT of
-    ArrayT _ _ t -> Just t
+    ArrayT _ _ t -> Just $ setMode mode t
     _ -> Nothing
 narrowArrayType _ _ _ = Nothing
 
 narrowFieldType :: SymbolTable -> Maybe Ident -> SymbolType -> Maybe SymbolType
 narrowFieldType _ Nothing baseT = Just baseT
-narrowFieldType table (Just field) (AliasT typeName _) =
-  symbolType <$> lookupField table typeName (getName field)
+narrowFieldType table (Just field) (AliasT typeName mode) =
+  setMode mode . symbolType <$> lookupField table typeName (getName field)
 narrowFieldType _ _ _ = Nothing
+
+setMode :: ProcParamPassMode -> SymbolType -> SymbolType
+setMode mode (AliasT name _) = AliasT name mode
+setMode mode (BuiltinT t _) = BuiltinT t mode
+setMode _ t = t
 
 boolT :: SymbolType
 boolT = BuiltinT TBool PassByVal

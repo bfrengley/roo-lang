@@ -61,10 +61,9 @@ optimiseStores
                        : rest
                      )
                )
-             ) =
-    if r1 == r2
-      then Oz.InstructionLine (Oz.InstrStore slot source) : rest
-      else original
+             )
+    | r1 == r2 = Oz.InstructionLine (Oz.InstrStore slot source) : rest
+    | otherwise = original
 optimiseStores (line : rest) = line : optimiseStores rest
 
 generateCode :: Roo.Program -> OzState ()
@@ -299,7 +298,7 @@ compileAliasTypeAssign :: SymbolTable -> Roo.LValue -> Roo.LValue -> MaybeOzStat
 compileAliasTypeAssign table destLval sourceLval =
   let -- extract the underlying alias type which the lvalue is a reference to so we can get its size
       extractBaseAliasType lval = case getLvalType table lval of
-        AliasT name _ -> Just $ AliasT name Roo.PassByVal
+        t@(AliasT _ _) -> Just $ setMode Roo.PassByVal t
         _ -> Nothing
       sourceSize = extractBaseAliasType sourceLval >>= typeSize table
       destSize = extractBaseAliasType destLval >>= typeSize table
