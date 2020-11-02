@@ -1,6 +1,6 @@
 #!/bin/bash
-TARGET="${1:-roo-lang}"
-[ -f "$TARGET"] && rm "$TARGET"
+TARGET="${1:-roo-lang}.zip"
+[ -f "$TARGET" ] && rm "$TARGET"
 cp ../{app,src}/*.hs .
-zip -r "$TARGET".zip *.hs Makefile Roo.cabal Setup.hs submit
-echo "created submission file $TARGET.zip"
+zip -r "$TARGET" *.hs Makefile Roo.cabal Setup.hs submit
+echo "created submission file $TARGET"
