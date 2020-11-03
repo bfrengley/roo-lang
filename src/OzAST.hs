@@ -128,7 +128,7 @@ data BuiltinFunction
 
 instance OzShow BuiltinFunction where
   ozShow BuiltinReadInt = "read_int"
-  ozShow BuiltinReadBool = "read_real"
+  ozShow BuiltinReadBool = "read_bool"
   ozShow BuiltinPrintInt = "print_int"
   ozShow BuiltinPrintBool = "print_bool"
   ozShow BuiltinPrintString = "print_string"

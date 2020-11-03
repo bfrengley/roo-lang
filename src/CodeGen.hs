@@ -19,7 +19,7 @@ import Semantics
 import SymbolTable
 import Text.Parsec (SourcePos)
 import Text.Parsec.Pos (sourceColumn, sourceLine)
-import Util (liftMaybe, liftToMaybeT, whenJust, (=%=))
+import Util (liftMaybe, liftToMaybeT, mapBoth, whenJust, (=%=))
 
 data OzIOT = OzIOInt | OzIOBool | OzIOStr
 
@@ -56,14 +56,13 @@ compileRooProgram program =
 optimiseStores :: [Oz.ProgramLine] -> [Oz.ProgramLine]
 optimiseStores [] = []
 optimiseStores
-  original@( ( Oz.InstructionLine (Oz.InstrLoadAddress r1 slot)
-                 : ( Oz.InstructionLine (Oz.InstrStoreIndirect r2 source)
-                       : rest
-                     )
-               )
-             )
-    | r1 == r2 = Oz.InstructionLine (Oz.InstrStore slot source) : rest
-    | otherwise = original
+  ( load@(Oz.InstructionLine (Oz.InstrLoadAddress r1 slot))
+      : ( store@(Oz.InstructionLine (Oz.InstrStoreIndirect r2 source))
+            : rest
+          )
+    )
+    | r1 == r2 = Oz.InstructionLine (Oz.InstrStore slot source) : optimiseStores rest
+    | otherwise = load : store : optimiseStores rest
 optimiseStores (line : rest) = line : optimiseStores rest
 
 generateCode :: Roo.Program -> OzState ()
@@ -76,6 +75,7 @@ generateCode prog@(Roo.Program _ _ procs) =
    in do
         tables' <- mapWriterT transformStateType tables
         zipWithM_ generateProcedureCode tables' procs
+        writeOutOfBoundsHandler
 
 transformStateType :: State () a -> State OzStateVal a
 transformStateType s1 = return $ evalState s1 ()
@@ -85,7 +85,7 @@ generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ procId@(Roo.Ide
   writeLabel $ procLabel procId
   writeInstrs stackSetup
   compileProcBody
-  when (stackSize > 0) $ writeInstrs stackCleanup
+  writeInstrs stackCleanup
   writeInstr Oz.InstrReturn
   where
     stackSize = case calculateStackSize symbolTable of
@@ -94,16 +94,13 @@ generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ procId@(Roo.Ide
     -- can you safely reset registers between statements? I think the answer is yes?
     compileProcBody = mapM_ (runMaybeT . compileStmt symbolTable >=> const resetRegister) statements
     stackSetup =
-      if stackSize > 0
-        then
-          let saveArgs = zipWith (\i arg -> generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
-              initVars = generateLocalVariableInitializeCodeForProc symbolTable
-           in concat
-                [ [Oz.InstrPushStackFrame $ Oz.Framesize stackSize],
-                  saveArgs,
-                  initVars
-                ]
-        else []
+      let saveArgs = zipWith (\i arg -> generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
+          initVars = generateLocalVariableInitializeCodeForProc symbolTable
+       in concat
+            [ [Oz.InstrPushStackFrame $ Oz.Framesize stackSize],
+              saveArgs,
+              initVars
+            ]
     stackCleanup = [Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
 
 calculateStackSize :: SymbolTable -> Maybe Int
@@ -155,6 +152,18 @@ generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbo
             Oz.InstrStore (Oz.StackSlot stackSlotNo) (Oz.Register 0)
           ]
     _ -> error ""
+
+outOfBoundsHandlerLabel :: Oz.Label
+outOfBoundsHandlerLabel = Oz.Label "_err_index_out_of_bounds"
+
+writeOutOfBoundsHandler :: OzState ()
+writeOutOfBoundsHandler = do
+  writeLabel outOfBoundsHandlerLabel
+  writeInstrs
+    [ Oz.InstrCallBuiltin Oz.BuiltinPrintString,
+      -- we have no way to control the exit code so just exit
+      Oz.InstrHalt
+    ]
 
 compileStmt :: SymbolTable -> Roo.Stmt -> MaybeOzState ()
 compileStmt table (Roo.SAtom pos stmt) = compileAtomicStmt table pos stmt
@@ -351,26 +360,29 @@ compileWrite table expr =
           _ -> failCompile
 
 compileExpr :: SymbolTable -> Roo.Expr -> MaybeOzState Oz.Register
-compileExpr _ (Roo.ConstBool _ val) = do
+compileExpr table expr = let expr' = propagateConsts expr in compileExpr' table expr'
+
+compileExpr' :: SymbolTable -> Roo.Expr -> MaybeOzState Oz.Register
+compileExpr' _ (Roo.ConstBool _ val) = do
   reg <- getNextRegister
   writeInstr $ Oz.InstrIntConst reg (Oz.boolConst val)
   return reg
-compileExpr _ (Roo.ConstInt _ val) = do
+compileExpr' _ (Roo.ConstInt _ val) = do
   reg <- getNextRegister
   writeInstr $ Oz.InstrIntConst reg (Oz.IntegerConst val)
   return reg
-compileExpr _ (Roo.ConstStr _ val) = do
+compileExpr' _ (Roo.ConstStr _ val) = do
   reg <- getNextRegister
   writeInstr $ Oz.InstrStringConst reg (Oz.StringConst val)
   return reg
-compileExpr table (Roo.UnOpExpr _ op expr) = do
+compileExpr' table (Roo.UnOpExpr _ op expr) = do
   lift $ expectUnOpType op (operatorPos expr) $ getExprType table expr
 
-  source <- compileExpr table expr
+  source <- compileExpr' table expr
   dest <- getNextRegister
   writeInstr $ unOpInstruction op dest source
   return dest
-compileExpr table (Roo.BinOpExpr pos op left right) = do
+compileExpr' table (Roo.BinOpExpr pos op left right) = do
   let leftT = getExprType table left
   lift $ expectBinOpType op (operatorPos left) leftT
   let rightT = getExprType table right
@@ -381,14 +393,82 @@ compileExpr table (Roo.BinOpExpr pos op left right) = do
   -- if we just did `leftReg <- compileExpr table left`, it might fail and therefore exit early
   -- without checking the right hand side of the expression, which means we'd only get errors
   -- for the left hand side
-  let leftReg = runMaybeT $ compileExpr table left
-  let rightReg = runMaybeT $ compileExpr table right
+  let leftReg = runMaybeT $ compileExpr' table left
+  let rightReg = runMaybeT $ compileExpr' table right
   leftReg' <- liftToMaybeT leftReg
   rightReg' <- liftToMaybeT rightReg
   dest <- getNextRegister
   writeInstr $ binOpInstruction op dest leftReg' rightReg'
   return dest
-compileExpr table (Roo.LVal _ lval) = compileLvalLoad Roo.PassByVal table lval
+compileExpr' table (Roo.LVal _ lval) = compileLvalLoad Roo.PassByVal table lval
+
+propagateConsts :: Roo.Expr -> Roo.Expr
+propagateConsts expr@(Roo.UnOpExpr pos op _) = case unOpReturnType op of
+  t
+    | t =%= intT -> evalIntExpr pos expr
+    | t =%= boolT -> evalBoolExpr pos expr
+    | otherwise -> expr
+propagateConsts expr@(Roo.BinOpExpr pos op _ _) = case binOpReturnType op of
+  t
+    | t =%= intT -> evalIntExpr pos expr
+    | t =%= boolT -> evalBoolExpr pos expr
+    | otherwise -> expr
+propagateConsts expr = expr
+
+evalIntExpr :: SourcePos -> Roo.Expr -> Roo.Expr
+evalIntExpr pos expr = case evalIntExpr' expr of
+  Left e -> e
+  Right i -> Roo.ConstInt pos i
+
+evalIntExpr' :: Roo.Expr -> Either Roo.Expr Integer
+evalIntExpr' (Roo.ConstInt _ i) = Right i
+evalIntExpr' expr@(Roo.UnOpExpr _ Roo.OpNeg expr') =
+  mapBoth (const expr) negate $ evalIntExpr' expr'
+evalIntExpr' expr@(Roo.BinOpExpr _ op left right) =
+  let left' = evalIntExpr' left
+      right' = evalIntExpr' right
+   in case (left', right') of
+        (Right i, Right j) -> case op of
+          Roo.OpMul -> Right $ i * j
+          Roo.OpMinus -> Right $ i - j
+          Roo.OpPlus -> Right $ i + j
+          Roo.OpDiv -> if j /= 0 then Right (i `div` j) else Left expr
+        _ -> Left expr
+evalIntExpr' expr = Left expr
+
+evalBoolExpr :: SourcePos -> Roo.Expr -> Roo.Expr
+evalBoolExpr pos expr = case evalBoolExpr' expr of
+  Left e -> e
+  Right b -> Roo.ConstBool pos b
+
+evalBoolExpr' :: Roo.Expr -> Either Roo.Expr Bool
+evalBoolExpr' (Roo.ConstBool _ b) = Right b
+evalBoolExpr' expr@(Roo.UnOpExpr _ Roo.OpNot expr') = mapBoth (const expr) not $ evalBoolExpr' expr'
+evalBoolExpr' expr@(Roo.BinOpExpr pos op left right) =
+  let left' = propagateConsts left
+      right' = propagateConsts right
+   in -- if/else is ugly in haskell, so I'll just let GHC optimise this one...
+      case () of
+        () | isBooleanOp op -> case (left', right') of
+          (Roo.ConstBool _ b, Roo.ConstBool _ b') -> case op of
+            Roo.OpAnd -> Right $ b && b'
+            Roo.OpOr -> Right $ b || b'
+            _ -> Left expr
+          _ -> Left $ Roo.BinOpExpr pos op left' right'
+        () | isRelOp op -> case (left', right') of
+          (Roo.ConstBool _ b, Roo.ConstBool _ b') -> Right $ evalRelOp op b b'
+          (Roo.ConstInt _ i, Roo.ConstInt _ i') -> Right $ evalRelOp op i i'
+          _ -> Left $ Roo.BinOpExpr pos op left' right'
+        () | otherwise -> Left expr
+evalBoolExpr' expr = Left expr
+
+evalRelOp :: (Ord a) => Roo.BinaryOp -> a -> a -> Bool
+evalRelOp Roo.OpEq l r = l == r
+evalRelOp Roo.OpNeq l r = l /= r
+evalRelOp Roo.OpGreater l r = l > r
+evalRelOp Roo.OpGreaterEq l r = l >= r
+evalRelOp Roo.OpLess l r = l < r
+evalRelOp Roo.OpLessEq l r = l <= r
 
 compileLvalLoad :: Roo.ProcParamPassMode -> SymbolTable -> Roo.LValue -> MaybeOzState Oz.Register
 -- load the value of a plain variable
@@ -447,32 +527,69 @@ compileIndexExpr table dest varIdent (Just expr) =
   let pos = Roo.exprStart expr
       baseT = symbolType <$> lookupVar table (getName varIdent)
    in do
-        elemT <-
+        (ident, size, elemT) <-
           ( case baseT of
               Just baseT'@(AliasT name _) -> case lookupType table name of
-                Just (ArrayT _ _ elemT') -> return elemT'
+                Just (ArrayT ident size elemT') -> return (ident, toInteger size, elemT')
                 Just (RecordT (Roo.Ident pos' _) _) ->
                   addError (UnexpectedIndex pos varIdent baseT' (Just pos')) >> failCompile
                 _ -> failCompile
               Just baseT' -> addError (UnexpectedIndex pos varIdent baseT' Nothing) >> failCompile
               Nothing -> failCompile
             )
-        lift $ expectType intT (InvalidIndexType pos) $ getExprType table expr
-        offsetReg <- compileExpr table expr
-        writeInstr $ Oz.InstrSubOffset dest dest offsetReg
-        return elemT
+        let expr' = propagateConsts expr
+        lift $ expectType intT (InvalidIndexType pos) $ getExprType table expr'
+        case expr' of
+          Roo.ConstInt _ i -> do
+            when (i >= size || i < 0) $ addError $ IndexOutOfBounds pos i size varIdent ident
+            when (i /= 0) $ do
+              offsetReg <- getNextRegister
+              writeInstrs
+                [ Oz.InstrIntConst offsetReg $ Oz.IntegerConst i,
+                  Oz.InstrSubOffset dest dest offsetReg
+                ]
+            return elemT
+          _ -> do
+            offsetReg <- compileExpr table expr'
+            lift $ writeBoundsCheck pos offsetReg size
+            writeInstr $ Oz.InstrSubOffset dest dest offsetReg
+            return elemT
+
+writeBoundsCheck :: SourcePos -> Oz.Register -> Integer -> OzState ()
+writeBoundsCheck sp idxReg size =
+  let okLabel = Oz.Label $ "inbounds_ln" ++ show (sourceLine sp) ++ "_col" ++ show (sourceColumn sp)
+   in do
+        sizeReg <- getNextRegister
+        zeroReg <- getNextRegister
+        cmpReg <- getNextRegister
+        writeInstrs
+          [ Oz.InstrIntConst sizeReg $ Oz.IntegerConst size,
+            Oz.InstrIntConst zeroReg $ Oz.IntegerConst 0,
+            Oz.InstrCmpGreaterEqualInt zeroReg idxReg zeroReg, -- idx >= 0
+            Oz.InstrCmpLessThanInt cmpReg idxReg sizeReg, -- idx < size
+            Oz.InstrAnd cmpReg cmpReg zeroReg, -- 0 <= idx < size
+            -- if the above is true, it's inbounds
+            Oz.InstrBranchOnTrue cmpReg okLabel,
+            -- if we're here, it's an out-of-bounds index
+            Oz.InstrStringConst reservedRegister $
+              Oz.StringConst $
+                T.unpack (writePos sp) ++ ": index out-of-bounds\\n",
+            Oz.InstrBranchUnconditional outOfBoundsHandlerLabel
+          ]
+        writeLabel okLabel
 
 compileFieldAccess :: SymbolTable -> Oz.Register -> Roo.Ident -> SymbolType -> Maybe Roo.Ident -> MaybeOzState ()
 compileFieldAccess _ _ _ _ Nothing = return ()
 compileFieldAccess table dest varIdent baseT (Just fieldIdent@(Roo.Ident pos _)) = case baseT of
   AliasT name _ -> case lookupType table name of
     Just (RecordT typeIdent fields) -> case Map.lookup (getName fieldIdent) fields of
-      Just (FieldSymbol _ idx) -> do
-        reg <- getNextRegister
-        writeInstrs
-          [ Oz.InstrIntConst reg $ Oz.IntegerConst $ toInteger idx,
-            Oz.InstrAddOffset dest dest reg
-          ]
+      Just (FieldSymbol _ idx) ->
+        when (idx /= 0) $ do
+          reg <- getNextRegister
+          writeInstrs
+            [ Oz.InstrIntConst reg $ Oz.IntegerConst $ toInteger idx,
+              Oz.InstrSubOffset dest dest reg
+            ]
       Nothing -> addError (UnknownField fieldIdent varIdent baseT typeIdent) >> failCompile
     Just (ArrayT (Roo.Ident pos' _) _ _) ->
       addError (UnexpectedField pos varIdent baseT (Just pos')) >> failCompile

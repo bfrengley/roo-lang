@@ -1,0 +1,11 @@
+array[10] integer int10_t;
+
+procedure main ()
+  int10_t arr;
+{
+  arr[0] <- 20;
+  #writeln arr[-1]; # compile-time invalid
+  #writeln arr[10]; # compile-time invalid
+  #writeln arr[5 - 4 * 2]; # compile-time invalid with constant propagation
+  arr[arr[0]] <- 1; # runtime invalid
+}

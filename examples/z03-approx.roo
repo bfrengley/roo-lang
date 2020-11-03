@@ -1,0 +1,15 @@
+record { integer a } record_t;
+array[1] record_t arr_t;
+
+procedure main ()
+record_t rec;
+arr_t arr;
+{
+    rec.a <- 20;
+    call foo(rec, arr);
+    writeln arr[0].a;
+}
+
+procedure foo(record_t rec, arr_t arr) {
+    arr[0] <- rec;
+}

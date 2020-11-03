@@ -45,6 +45,7 @@ data SemanticError
   | AliasLoadInValueMode Ident Ident SymbolType
   | AliasWrite SourcePos SymbolType
   | InvalidIndexType SourcePos SymbolType SymbolType
+  | IndexOutOfBounds SourcePos Integer Integer Ident Ident
   | MissingMain
   | MainArity SourcePos Int
   deriving (Show)
@@ -150,6 +151,19 @@ writeError' source (InvalidIndexType pos actualT expectedT) =
       <> ticks (printLocalType NoPrintMode expectedT)
       <> ")",
     writeContext source pos
+  ]
+writeError' source (IndexOutOfBounds pos idx size (Ident varPos _) (Ident typePos typeName)) =
+  [ errorStart pos <> "index out-of-bounds (array type " <> ticks (T.pack typeName)
+      <> " has length "
+      <> showT size
+      <> ", but the index expression evaluates to "
+      <> showT idx
+      <> ")",
+    writeContext source pos,
+    noteStart varPos <> "variable declared here:",
+    writeContext source varPos,
+    noteStart typePos <> "type declared here:",
+    writeContext source typePos
   ]
 writeError' source (UnexpectedField pos (Ident pos' _) varT typeDeclPos) =
   let typeDeclNote = case typeDeclPos of

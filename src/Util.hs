@@ -31,3 +31,7 @@ whenJust = forM_
 -- | Lifts a 'Maybe b' inside a monad 'm' into a 'MaybeT m b'.
 liftToMaybeT :: Monad m => m (Maybe b) -> MaybeT m b
 liftToMaybeT = lift >=> liftMaybe
+
+mapBoth :: (a -> c) -> (b -> d) -> Either a b -> Either c d
+mapBoth f _ (Left a) = Left $ f a
+mapBoth _ f (Right b) = Right $ f b
