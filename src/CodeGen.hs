@@ -520,20 +520,26 @@ compileIndexExpr table dest varIdent (Just expr) =
             )
         let expr' = propagateConsts expr
         lift $ expectType intT (InvalidIndexType pos) $ getExprType table expr'
+        let elemSize = toInteger $ fromMaybe 1 $ typeSize table elemT
         case expr' of
           Roo.ConstInt _ i -> do
             when (i >= size || i < 0) $ addError $ IndexOutOfBounds pos i size varIdent ident
             when (i /= 0) $ do
               offsetReg <- getNextRegister
               writeInstrs
-                [ Oz.InstrIntConst offsetReg $ Oz.IntegerConst i,
+                [ Oz.InstrIntConst offsetReg $ Oz.IntegerConst $ i * elemSize,
                   Oz.InstrSubOffset dest dest offsetReg
                 ]
             return elemT
           _ -> do
             offsetReg <- compileExpr table expr'
             lift $ writeBoundsCheck pos offsetReg size
-            writeInstr $ Oz.InstrSubOffset dest dest offsetReg
+            sizeReg <- getNextRegister
+            writeInstrs
+              [ Oz.InstrIntConst sizeReg $ Oz.IntegerConst elemSize,
+                Oz.InstrMulInt offsetReg offsetReg sizeReg,
+                Oz.InstrSubOffset dest dest offsetReg
+              ]
             return elemT
 
 writeBoundsCheck :: SourcePos -> Oz.Register -> Integer -> OzState ()

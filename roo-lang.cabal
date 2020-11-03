@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0ba009fd8117eedae07b0f7581adb72a3c1181253fa45e8a07e24025fd449e0b
+-- hash: db24aaf0f6ae72766c5b0c18a8c05109171b77ecce50106c5a88fe41f77f56e4
 
 name:           roo-lang
 version:        0.1.0.0
@@ -69,6 +69,7 @@ test-suite roo-lang-test
   other-modules:
       OzWriter.OzWriterSpec
       PrettyPrint.PrettyPrintSpec
+      Roo.CompileAllExamplesSpec
       Roo.SemanticTestsSpec
       Paths_roo_lang
   hs-source-dirs:
