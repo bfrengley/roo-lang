@@ -37,6 +37,7 @@ data SemanticError
   | InvalidArrayType Ident Ident
   | InvalidUnaryType SourcePos UnaryOp SymbolType SymbolType
   | InvalidBinaryType SourcePos BinaryOp SymbolType [SymbolType]
+  | InvalidConditionType SourcePos SymbolType SymbolType
   | BinaryTypeMismatch SourcePos BinaryOp SymbolType SymbolType
   | InvalidAssign SourcePos Ident SymbolType SymbolType
   | UnexpectedIndex SourcePos Ident SymbolType (Maybe SourcePos)
@@ -220,6 +221,13 @@ writeError' source (ArgumentTypeMismatch argPos (Ident paramPos _) found expecte
     writeContext source argPos,
     noteStart paramPos <> "parameter declared here:",
     writeContext source paramPos
+  ]
+writeError' source (InvalidConditionType pos actualT expectedT) =
+  [ errorStart pos <> "invalid condition type " <> ticks (printLocalType NoPrintMode actualT)
+      <> " (expected "
+      <> ticks (printLocalType NoPrintMode expectedT)
+      <> ")",
+    writeContext source pos
   ]
 writeError' _ MissingMain =
   ["error: no `main` procedure found"] -- position at end of source

@@ -175,11 +175,14 @@ compileCompStmt symbolTable sp (Roo.IfBlock testExpr trueStmts falseStmts) =
       elseLabel = Oz.Label $ ifIdent ++ "_elsebranch"
       endLabel = Oz.Label $ ifIdent ++ "_end"
       evalExpr = compileExpr symbolTable testExpr
+      exprT = getExprType symbolTable testExpr
+      exprPos = operatorPos testExpr
       hasElse = not $ null falseStmts
    in do
         -- force execution to continue with a dummy register even if compiling the expression fails
         -- we'll rely on an error having been written to catch it later
         writeLabel $ Oz.Label ifIdent -- this isn't necessary (it's not used)
+        unless (exprT =%= boolT) $ addError $ InvalidConditionType exprPos exprT boolT
         resultRegister <- lift $ forceCompile reservedRegister evalExpr
         writeInstr $ Oz.InstrBranchOnFalse resultRegister $ if hasElse then elseLabel else endLabel
         mapM_ (compileStmt symbolTable) trueStmts
@@ -194,6 +197,8 @@ compileCompStmt symbolTable sp (Roo.WhileBlock testExpr stmts) =
       testLabel = Oz.Label $ whileIdent ++ "_test"
       startLabel = Oz.Label $ whileIdent ++ "_start"
       evalExpr = compileExpr symbolTable testExpr
+      exprT = getExprType symbolTable testExpr
+      exprPos = operatorPos testExpr
    in do
         -- we compile while loops as if they're do-while loops (with the test after the body), but
         -- with an immediate branch to the test
@@ -202,6 +207,7 @@ compileCompStmt symbolTable sp (Roo.WhileBlock testExpr stmts) =
         writeLabel startLabel
         mapM_ (compileStmt symbolTable) stmts
         writeLabel testLabel
+        unless (exprT =%= boolT) $ addError $ InvalidConditionType exprPos exprT boolT
         resultRegister <- evalExpr
         writeInstr $ Oz.InstrBranchOnTrue resultRegister startLabel
 
