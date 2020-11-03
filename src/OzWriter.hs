@@ -1,15 +1,26 @@
 {-# LANGUAGE OverloadedStrings #-}
-
+-- |
+-- Module: OzWriter
+-- Description: This module defines functions for correct output of the OzAST datatypes
+-- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
+--             Ben Frengley <bfrengley@student.unimelb.edu.au>
+--
+-- The OzAST module defines Haskell types for all the relevant elements of any
+-- possible Oz program - this module defines functions for converting these
+-- datatypes back to strings for serialising into an output Oz file.
 module OzWriter where
 
 import qualified Data.Text as T
+
 import OzAST
 import PrettyPrint (indent)
 
+-- | Convert and entire Oz program to its textual representation
 writeProgram :: Program -> T.Text
 writeProgram (Program programLines) =
   T.unlines (map writeProgramLine programLines)
 
+-- | Convert a line of an Oz program to its textual representation
 writeProgramLine :: ProgramLine -> T.Text
 writeProgramLine (InstructionLine instr) = indent $ writeInstruction instr
 writeProgramLine (LabelLine label) = writeLabel label
@@ -55,11 +66,20 @@ writeInstruction (InstrDebugRegister r) = writeInstrWithArgs "debug_reg" [ozShow
 writeInstruction (InstrDebugSlot ssn) = writeInstrWithArgs "debug_slot" [ozShowT ssn]
 writeInstruction (InstrDebugStack) = "debug_stack"
 
+-- | Generic Oz instruction formatter
+--   Just about all instructions in Oz follow the same format in terms of
+--   comma-separated arguments so this can be used as a way to serialise them
 writeInstrWithArgs :: OzShow s => T.Text -> [s] -> T.Text
 writeInstrWithArgs instr args = T.unwords [instr, T.intercalate ", " $ map ozShowT args]
 
+-- | Convenience method for using the Haskell Text type instead of string
 ozShowT :: OzShow s => s -> T.Text
 ozShowT = T.pack . ozShow
 
+-- Annoyingly, writeInstrWithArgs can't accept a list of heterogeneous OzShow
+-- types, so in some cases arguments must be turned into `Text` instaces to
+-- get a homogeneous list. This leads to the need for a `Text` instance for
+-- the OzShow typeclass to make a list of Text instances play nice with the
+-- rest of the OzWriter machinery
 instance OzShow T.Text where
   ozShow = T.unpack
