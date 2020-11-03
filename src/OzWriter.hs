@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+
 -- |
 -- Module: OzWriter
 -- Description: This module defines functions for correct output of the OzAST datatypes
@@ -11,7 +12,6 @@
 module OzWriter where
 
 import qualified Data.Text as T
-
 import OzAST
 import PrettyPrint (indent)
 
@@ -73,24 +73,18 @@ writeInstruction (InstrCmpLessThanInt rDest rLeft rRight) =
   writeInstrWithArgs "cmp_lt_int" [rDest, rLeft, rRight]
 writeInstruction (InstrCmpLessEqualInt rDest rLeft rRight) =
   writeInstrWithArgs "cmp_le_int" [rDest, rLeft, rRight]
-writeInstruction (InstrAnd rDest rLeft rRight) = w
-
-riteInstrWithArgs "and" [rDest, rLeft, rRight]
-
+writeInstruction (InstrAnd rDest rLeft rRight) =
+  writeInstrWithArgs "and" [rDest, rLeft, rRight]
 writeInstruction (InstrOr rDest rLeft rRight) =
   writeInstrWithArgs "or" [rDest, rLeft, rRight]
 writeInstruction (InstrNot rDest rSrc) =
   writeInstrWithArgs "not" [rDest, rSrc]
 writeInstruction (InstrMove rDest rSrc) =
   writeInstrWithArgs "move" [rDest, rSrc]
-writeInstruction (InstrBranchOnTrue r l) = w
-
-riteInstrWithArgs "branch_on_true" [ozShowT r, ozShowT l]
-
-writeInstruction (InstrBranchOnFalse r l) = w
-
-riteInstrWithArgs "branch_on_false" [ozShowT r, ozShowT l]
-
+writeInstruction (InstrBranchOnTrue r l) =
+  writeInstrWithArgs "branch_on_true" [ozShowT r, ozShowT l]
+writeInstruction (InstrBranchOnFalse r l) =
+  writeInstrWithArgs "branch_on_false" [ozShowT r, ozShowT l]
 writeInstruction (InstrBranchUnconditional l) =
   writeInstrWithArgs "branch_uncond" [ozShowT l]
 writeInstruction (InstrCall l) =
