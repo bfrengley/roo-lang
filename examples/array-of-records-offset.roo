@@ -1,0 +1,26 @@
+record { integer a; boolean b; integer c } doubleint;
+array[50] doubleint bigarr;
+
+procedure main ()
+    bigarr buf;
+    integer i;
+{
+    i <- 0;
+    write "writing values...";
+    while i < 50 do
+        buf[i].a <- i*2;
+        buf[i].c <- i*2+1;
+        i <- i + 1;
+    od
+    writeln " done";
+    i <- 0;
+    write "results: ";
+    while i < 50 do
+        write buf[i].a;
+        write " ";
+        write buf[i].c;
+        write " ";
+        i <- i + 1;
+    od
+    writeln "";
+}
