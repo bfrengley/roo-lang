@@ -13,13 +13,9 @@ writeProgram (Program programLines) =
 writeProgramLine :: ProgramLine -> T.Text
 writeProgramLine (InstructionLine instr) = indent $ writeInstruction instr
 writeProgramLine (LabelLine label) = writeLabel label
-  
+
 writeLabel :: Label -> T.Text
 writeLabel label = ozShowT label <> ":"
-
--- writeBlock :: LabelledBlock -> [T.Text]
--- writeBlock (LabelledBlock label instrs) =
---   (writeLabel label) : indentMap writeInstruction instrs
 
 writeInstruction :: Instruction -> T.Text
 writeInstruction (InstrPushStackFrame fs) = writeInstrWithArgs "push_stack_frame" [fs]

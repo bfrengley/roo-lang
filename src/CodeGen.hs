@@ -5,14 +5,10 @@ module CodeGen where
 import qualified AST as Roo
 import Analysis
 import Control.Monad.State.Strict
-import Control.Monad.Trans.Maybe
--- import Data.Map.Ordered
-
+import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import Control.Monad.Trans.Writer.Strict (mapWriterT, runWriterT)
-import Data.Either (lefts, rights)
-import Data.List
 import qualified Data.Map as Map
-import Data.Maybe (fromJust, fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromJust, fromMaybe)
 import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
@@ -67,91 +63,70 @@ optimiseStores (line : rest) = line : optimiseStores rest
 
 generateCode :: Roo.Program -> OzState ()
 generateCode prog@(Roo.Program _ _ procs) =
-  let tables =
+  let buildTables =
         ( do
             globalTable <- buildGlobalSymbolTable prog
             mapM (buildLocalSymbolTable globalTable) procs
         )
+      -- converts the state within s1 from () to the context-appropriate type (OzStateVal)
+      transformStateType s1 = return $ evalState s1 ()
    in do
-        tables' <- mapWriterT transformStateType tables
-        zipWithM_ generateProcedureCode tables' procs
+        tables <- mapWriterT transformStateType buildTables
+        zipWithM_ generateProcedureCode tables procs
         writeOutOfBoundsHandler
 
-transformStateType :: State () a -> State OzStateVal a
-transformStateType s1 = return $ evalState s1 ()
-
 generateProcedureCode :: SymbolTable -> Roo.Procedure -> OzState ()
-generateProcedureCode symbolTable (Roo.Procedure (Roo.ProcHead _ procId@(Roo.Ident _ procName) args) (Roo.ProcBody _ statements)) = do
-  writeLabel $ procLabel procId
-  writeInstrs stackSetup
-  compileProcBody
-  writeInstrs stackCleanup
-  writeInstr Oz.InstrReturn
-  where
-    stackSize = case calculateStackSize symbolTable of
-      Just size -> size
-      Nothing -> error $ "Stack size calculation for procedure " ++ procName ++ " failed"
-    -- can you safely reset registers between statements? I think the answer is yes?
-    compileProcBody = mapM_ (runMaybeT . compileStmt symbolTable >=> const resetRegister) statements
-    stackSetup =
-      let saveArgs = zipWith (\i arg -> generateArgumentStackSaveInstr (Oz.Register i) 0) [0 ..] args
-          initVars = generateLocalVariableInitializeCodeForProc symbolTable
-       in concat
-            [ [Oz.InstrPushStackFrame $ Oz.Framesize stackSize],
-              saveArgs,
-              initVars
-            ]
-    stackCleanup = [Oz.InstrPopStackFrame (Oz.Framesize stackSize)]
+generateProcedureCode
+  table
+  ( Roo.Procedure
+      (Roo.ProcHead _ procId args)
+      (Roo.ProcBody _ statements)
+    ) =
+    let -- if it's Nothing there's an error somewhere else
+        stackSize = fromMaybe 0 $ calculateStackSize table
+        -- try compile each statement and then reset the register between them, since we don't do
+        -- any cross-statement optimisation that would require us to preserve register state
+        compileProcBody = mapM_ (runMaybeT . compileStmt table >=> const resetRegister) statements
+        saveArgsToStack = forM_ [0 .. length args - 1] saveArgumentToStack
+     in do
+          writeLabel $ procLabel procId
+          writeInstr $ Oz.InstrPushStackFrame $ Oz.Framesize stackSize
+
+          when (stackSize > 0) $ do
+            saveArgsToStack
+            initLocalVars table
+
+          compileProcBody
+
+          writeInstr $ Oz.InstrPopStackFrame (Oz.Framesize stackSize)
+          writeInstr Oz.InstrReturn
 
 calculateStackSize :: SymbolTable -> Maybe Int
 calculateStackSize table@(SymbolTable _ _ vars) = do
   paramSizes <- mapM (typeSize table) $ orderedSymbols vars
   return $ sum paramSizes
 
-generateArgumentStackSaveInstr :: Oz.Register -> Int -> Oz.Instruction
-generateArgumentStackSaveInstr register@(Oz.Register registerNumber) stackOffset =
-  let stackSlotNo = stackOffset + registerNumber
-   in Oz.InstrStore (Oz.StackSlot stackSlotNo) register
-
-stackSize :: SizedSymbol s => s -> SymbolTable -> Int
-stackSize symbol symbolTable =
-  case typeSize symbolTable symbol of
-    Just s -> s
-    Nothing -> error "empty stack size???"
+saveArgumentToStack :: Int -> OzState ()
+saveArgumentToStack offset =
+  -- since parameters can only be of size 1 (only alias types in value mode are size > 1, and
+  -- they're not legal as parameters), the stack slot and the register number are the same
+  writeInstr $ Oz.InstrStore (Oz.StackSlot offset) $ Oz.Register offset
 
 -- the symbol table for a given procedure contains everything needed to
 -- generate the variable initialisation code for the procedure
-generateLocalVariableInitializeCodeForProc :: SymbolTable -> [Oz.Instruction]
-generateLocalVariableInitializeCodeForProc symbolTable =
-  concatMap
-    (generateLocalVariableInitializeCode symbolTable)
-    (localVars symbolTable)
+initLocalVars :: SymbolTable -> OzState ()
+initLocalVars symbolTable = do
+  -- all default values are 0, so we can just use a single source register
+  writeInstr $ Oz.InstrIntConst reservedRegister $ Oz.IntegerConst 0
+  mapM_ (runMaybeT . initLocalVar symbolTable) (localVars symbolTable)
 
-generateLocalVariableInitializeCode :: SymbolTable -> LocalSymbol -> [Oz.Instruction]
-generateLocalVariableInitializeCode symbolTable lVarSym@(LocalSymbol (NamedSymbol varIdent varType) _ stackSlotNo) =
-  case varType of
-    AliasT aliasName passMode ->
-      -- Alias types are of variable size, so they will need a variable number
-      -- of stack slot initialisations
-      let typeStackSize = case typeSize symbolTable lVarSym of
-            Just s -> s
-            Nothing -> error $ "Variable of type " ++ T.unpack aliasName ++ " has empty stack size???"
-       in concat $
-            [ [Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst 0)],
-              -- simple approach - just make one stack store/write instruction
-              -- for every slot occupied by the type
-              [Oz.InstrStore (Oz.StackSlot (stackSlotNo + i)) (Oz.Register 0) | i <- [0 .. (typeStackSize -1)]]
-            ]
-    BuiltinT builtinT passMode ->
-      let initialVal = case passMode of
-            Roo.PassByVal -> case builtinT of
-              Roo.TBool -> 0
-              Roo.TInt -> 0
-            Roo.PassByRef -> error "can't have passbyref for local var??"
-       in [ Oz.InstrIntConst (Oz.Register 0) (Oz.IntegerConst initialVal),
-            Oz.InstrStore (Oz.StackSlot stackSlotNo) (Oz.Register 0)
-          ]
-    _ -> error ""
+initLocalVar :: SymbolTable -> LocalSymbol -> MaybeOzState ()
+initLocalVar table lVarSym@(LocalSymbol (NamedSymbol _ _) _ slot) = do
+  typeStackSize <- liftMaybe $ typeSize table lVarSym
+  writeInstrs
+    [ Oz.InstrStore (Oz.StackSlot (slot + i)) reservedRegister
+      | i <- [0 .. typeStackSize - 1]
+    ]
 
 outOfBoundsHandlerLabel :: Oz.Label
 outOfBoundsHandlerLabel = Oz.Label "_err_index_out_of_bounds"
