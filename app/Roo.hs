@@ -34,40 +34,13 @@ main =
     progname <- getProgName
     args <- getArgs
     (file, opt) <- checkArgs progname args
-    inputRooSource <- readFile file
-
-    -- Try to parse the source code
-    let parseResult = parseRooProgram file inputRooSource
-     in case parseResult of
-          -- Success - can proceed with a parsed Roo AST
-          Right ast ->
-            case opt of
-              Just OPrint ->
-                -- Output a pretty-printed version of the parsed AST
-                I.putStr (prettyPrint ast)
-              Just OAST ->
-                -- Output the AST as a Haskell datastructure
-                print ast
-              Just OCompare ->
-                if isPrintParseIdempotent ast
-                  then putStrLn "OK."
-                  else exitWith (ExitFailure 2)
-              Nothing ->
-                -- Treat the default option/behaviour as compilation
-
-                -- Perform semantic analysis
-                case compileRooProgram ast of
-                  Right compiledProgram ->
-                    putStrLn . T.unpack $ writeProgram compiledProgram
-                  Left errors -> do
-                    -- semantic errors found, print them out
-                    mapM_ (putStrLn . T.unpack . writeError (lines inputRooSource)) errors
-                    exitWith (ExitFailure 2)
-          -- Parse error
-          Left err -> do
-            putStr "Parse error at "
-            print err
-            exitWith (ExitFailure 2)
+    rooSource <- readFile file
+    case parseRooProgram file rooSource of
+      Right ast -> runWithOpts rooSource ast opt
+      Left err -> do
+        putStr "Parse error at "
+        print err
+        exitWith (ExitFailure 2)
 
 -- | 'checkArgs' tests the arguments provided to the program against the recognised arguments.
 -- If it finds unrecognised arguments, it exits and prints a usage message.
@@ -90,6 +63,21 @@ checkArgs progname _ =
     putStrLn "    -c: compare the pretty printed output of the program against the result of"
     putStrLn "        parsing the output and printing it again"
     exitWith (ExitFailure 1)
+
+runWithOpts :: String -> Program -> Maybe Opt -> IO ()
+runWithOpts _ ast (Just OPrint) = I.putStr (prettyPrint ast)
+runWithOpts _ ast (Just OAST) = print ast
+runWithOpts _ ast (Just OCompare) =
+  if isPrintParseIdempotent ast
+    then putStrLn "OK."
+    else exitWith (ExitFailure 2)
+runWithOpts source ast Nothing =
+  case compileRooProgram ast of
+    Right ozCode ->
+      putStrLn . T.unpack $ writeProgram ozCode
+    Left errors -> do
+      mapM_ (putStrLn . T.unpack . writeError (lines source)) errors
+      exitWith (ExitFailure 2)
 
 -- | 'isPrintParseIdempotent' checks if pretty printing a program retains the same parse by
 -- comparing the pretty printed program to the result of parsing the pretty printed output and
