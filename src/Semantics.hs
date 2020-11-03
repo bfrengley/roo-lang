@@ -4,8 +4,8 @@
 module Semantics where
 
 import AST
-import Control.Monad.State.Strict
-import Control.Monad.Writer.Strict
+import Control.Monad.State.Strict (State)
+import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT)
 import Data.Text (Text)
 import qualified Data.Text as T
 import PrettyPrint (pPrintBuiltinType, printBinOp, showT)

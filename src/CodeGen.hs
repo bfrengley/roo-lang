@@ -5,8 +5,41 @@
 -- Description: This module provides functions which generate Oz code from a Roo AST.
 -- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
 --             Ben Frengley <bfrengley@student.unimelb.edu.au>
-module CodeGen where
+--
+-- This module defines Roo-to-Oz compilation. Compilation consists of several steps:
+--   1) generate a global symbol table
+--   2) generate a local symbol table for each procedure
+--   3) attempt to generate code for each procedure
+--   4) (very) minor peephole optimisations
+--
+-- Semantic checking is carried out along the way, and errors are recorded using a 'WriterT'.
+-- The compiler is as optimistic as possible, so as to check as much of the program as possible.
+-- It does this by generating code wherever it possibly can (even if it might be wrong), only
+-- giving up if it is entirely impossible to generate code (such as loading an lvalue whose type
+-- is unknown), and even then only giving up as locally as possible.
+--
+-- In many cases, it's possible to make assumptions that everything is ok (or perform partial
+-- recovery from an error and continue) and continue to generate code. For example, we use a bottom
+-- type called UnknownT to allow expressions with unknown variables to be fully type checked (the
+-- bottom type is considered "loosely" equal to any other type, so it doesn't cause type errors).
+--
+-- While this compiler is for the most part non-optimising, we do implement several minor
+-- optimisations. The most major is constant propagation for both booleans and integers. Most other
+-- optimisations that we implement are to save just a few instructions here and there. We
+-- implement a very limited form of peephole optimisation to optimise
+-- 'load_address; store_indirect'.
+--
+-- We also implement bounds checking at both compile time (using constant propagation) and runtime.
+--
+-- If any errors have been recorded by the time compilation finishes, the generated code is thrown
+-- away entirely and just the errors are returned.
+--
+-- This is almost certainly not the best way to handle recording and recovering from errors, but
+-- it does a decent job of recording the vast majority of errors (and judiciously skipping some
+-- errors out when they're irrelevant, mostly because of some other error).
+module CodeGen (compileRooProgram) where
 
+import AST (ProcParamPassMode (..))
 import qualified AST as Roo
 import Analysis
 import Control.Monad.State.Strict
@@ -18,27 +51,40 @@ import qualified Data.Text as T
 import qualified OzAST as Oz
 import Semantics
 import SymbolTable
-import Text.Parsec (SourcePos)
-import Text.Parsec.Pos (sourceColumn, sourceLine)
+import Text.Parsec (SourcePos, sourceColumn, sourceLine)
 import Util (liftMaybe, liftToMaybeT, mapBoth, whenJust, (=%=))
 
-data OzIOT = OzIOInt | OzIOBool | OzIOStr
-
-data RooWriteT = RooWrite | RooWriteLn
-
+-- | We store the lowest free register and the lines of code written so far in state.
 data OzStateVal = OzStateVal
-  { register :: Oz.Register,
+  { -- | The lowest free register. Gets reset between statements.
+    register :: Oz.Register,
+    -- | The lines of code written so far. Writing to this is done using 'writeInstr',
+    -- 'writeInstrs', and 'writeLabel'.
     code :: [Oz.ProgramLine]
   }
 
+-- | The empty state from which compilation begins.
 initialState :: OzStateVal
 initialState = OzStateVal {register = initialRegister, code = []}
 
--- track the lowest free register
+-- | Oz code generation uses 'SemanticState' for recorded errors, with 'OzStateVal' as the state
+-- type.
 type OzState = SemanticState OzStateVal
 
+-- | Generating code in a 'MaybeT' allows us to use short-circuiting when something goes wrong.
 type MaybeOzState = MaybeT OzState
 
+-- | 'compileRooProgram' compiles a Roo AST into an Oz AST. If any errors are found during the
+-- compilation process, a list of errors is returned in a 'Left'; otherwise, the Oz program is
+-- returned in a 'Right'.
+compileRooProgram :: Roo.Program -> Either [SemanticError] Oz.Program
+compileRooProgram program =
+  let ((_, errors), finalState) = runState (runWriterT $ generateCode program) initialState
+   in case errors of
+        [] -> Right $ Oz.Program $ runtimeBoilerplate ++ optimiseStores (code finalState)
+        _ -> Left errors
+
+-- | Every Oz program starts with a call to main, and a halt instruction.
 runtimeBoilerplate :: [Oz.ProgramLine]
 runtimeBoilerplate =
   map
@@ -47,13 +93,10 @@ runtimeBoilerplate =
       Oz.InstrHalt
     ]
 
-compileRooProgram :: Roo.Program -> Either [SemanticError] Oz.Program
-compileRooProgram program =
-  let ((_, errors), finalState) = runState (runWriterT $ generateCode program) initialState
-   in case errors of
-        [] -> Right $ Oz.Program $ runtimeBoilerplate ++ optimiseStores (code finalState)
-        _ -> Left errors
-
+-- | Optimise stack stores where an address is loaded for a stack slot, then something is
+-- stored at that address using 'store_indirect'. This is commonly generated by the compiler for
+-- assignments where the target is an lvalue without index or field, so this optimisation applies
+-- frequently.
 optimiseStores :: [Oz.ProgramLine] -> [Oz.ProgramLine]
 optimiseStores [] = []
 optimiseStores
@@ -66,6 +109,7 @@ optimiseStores
     | otherwise = load : store : optimiseStores rest
 optimiseStores (line : rest) = line : optimiseStores rest
 
+-- | Generate the Oz code for the program inside a state monad.
 generateCode :: Roo.Program -> OzState ()
 generateCode prog@(Roo.Program _ _ procs) =
   let buildTables =
@@ -77,11 +121,15 @@ generateCode prog@(Roo.Program _ _ procs) =
       transformStateType s1 = return $ evalState s1 ()
    in do
         tables <- mapWriterT transformStateType buildTables
-        zipWithM_ generateProcedureCode tables procs
+        zipWithM_ compileProcedure tables procs
+        -- this could be excluded if there are no array types in the program, but if that's the
+        -- case it will never be entered so it's only a space optimisation
         writeOutOfBoundsHandler
 
-generateProcedureCode :: SymbolTable -> Roo.Procedure -> OzState ()
-generateProcedureCode
+-- | Compile a procedure. The symbol table should be a local symbol table for the procedure being
+-- compiled.
+compileProcedure :: SymbolTable -> Roo.Procedure -> OzState ()
+compileProcedure
   table
   ( Roo.Procedure
       (Roo.ProcHead _ procId args)
@@ -106,27 +154,33 @@ generateProcedureCode
           writeInstr $ Oz.InstrPopStackFrame (Oz.Framesize stackSize)
           writeInstr Oz.InstrReturn
 
+-- | Calculate the stack size. The stack size is the sum of the sizes of all local symbols (both
+-- parameters and local variables) in the procedure.
+-- If there is a local of an unknown size, we return Nothing --- an error is recorded during
+-- symbol table generation.
 calculateStackSize :: SymbolTable -> Maybe Int
 calculateStackSize table@(SymbolTable _ _ vars) = do
-  paramSizes <- mapM (typeSize table) $ orderedSymbols vars
-  return $ sum paramSizes
+  symbolSizes <- mapM (typeSize table) $ orderedSymbols vars
+  return $ sum symbolSizes
 
+-- | Save the argument at the given position into the appropriate stack slot.
 saveArgumentToStack :: Int -> OzState ()
 saveArgumentToStack offset =
   -- since parameters can only be of size 1 (only alias types in value mode are size > 1, and
   -- they're not legal as parameters), the stack slot and the register number are the same
   writeInstr $ Oz.InstrStore (Oz.StackSlot offset) $ Oz.Register offset
 
--- the symbol table for a given procedure contains everything needed to
--- generate the variable initialisation code for the procedure
+-- | Initialise the stack slots for all local variables to their default values.
 initLocalVars :: SymbolTable -> OzState ()
 initLocalVars symbolTable = do
   -- all default values are 0, so we can just use a single source register
   writeInstr $ Oz.InstrIntConst reservedRegister $ Oz.IntegerConst 0
   mapM_ (runMaybeT . initLocalVar symbolTable) (localVars symbolTable)
 
+-- | Set all stack slots occupied by the given symbol to the default value (stored in r0).
 initLocalVar :: SymbolTable -> LocalSymbol -> MaybeOzState ()
 initLocalVar table lVarSym@(LocalSymbol (NamedSymbol _ _) _ slot) = do
+  -- if we can't get the size of the symbol, this exits early and writes no instructions
   typeStackSize <- liftMaybe $ typeSize table lVarSym
   writeInstrs
     [ Oz.InstrStore (Oz.StackSlot (slot + i)) reservedRegister
@@ -136,6 +190,9 @@ initLocalVar table lVarSym@(LocalSymbol (NamedSymbol _ _) _ slot) = do
 outOfBoundsHandlerLabel :: Oz.Label
 outOfBoundsHandlerLabel = Oz.Label "_err_index_out_of_bounds"
 
+-- | Generate a handler which is entered if an out-of-bounds array access is detected.
+-- This is always the last labelled block in a program; it prints an error message generated by the
+-- out-of-bounds detection and exits the program.
 writeOutOfBoundsHandler :: OzState ()
 writeOutOfBoundsHandler = do
   writeLabel outOfBoundsHandlerLabel
@@ -145,10 +202,17 @@ writeOutOfBoundsHandler = do
       Oz.InstrHalt
     ]
 
+-- | Attempt to compile a statement.
 compileStmt :: SymbolTable -> Roo.Stmt -> MaybeOzState ()
 compileStmt table (Roo.SAtom pos stmt) = compileAtomicStmt table pos stmt
 compileStmt table (Roo.SComp pos stmt) = compileCompStmt table pos stmt
 
+-- | Compile a composite statement. Composite statements will always require a label to be generated
+-- since they have to conditionally execute code; since Roo is whitespace agnostic more than one
+-- composite statement could be on the same line, so we use the line and column to generate the
+-- labels for the statement. We could generate incrementing counters for each composite statement
+-- instead, but since Roo can only span a single file, this approach doesn't lead to issues and
+-- allows us to avoid a little use of state.
 compileCompStmt :: SymbolTable -> SourcePos -> Roo.CompositeStmt -> MaybeOzState ()
 compileCompStmt symbolTable sp (Roo.IfBlock testExpr trueStmts falseStmts) =
   let ifIdent = "if_ln" ++ show (sourceLine sp) ++ "_col" ++ show (sourceColumn sp)
@@ -159,18 +223,24 @@ compileCompStmt symbolTable sp (Roo.IfBlock testExpr trueStmts falseStmts) =
       exprPos = operatorPos testExpr
       hasElse = not $ null falseStmts
    in do
+        unless (exprT =%= boolT) $ addError $ InvalidConditionType exprPos exprT boolT
+        writeLabel $ Oz.Label ifIdent -- this isn't necessary (it's not used) but it's nice to debug
+
         -- force execution to continue with a dummy register even if compiling the expression fails
         -- we'll rely on an error having been written to catch it later
-        writeLabel $ Oz.Label ifIdent -- this isn't necessary (it's not used)
-        unless (exprT =%= boolT) $ addError $ InvalidConditionType exprPos exprT boolT
         resultRegister <- lift $ forceCompile reservedRegister evalExpr
+        -- if we don't have an else we can just elide the else label entirely and jump to the end
         writeInstr $ Oz.InstrBranchOnFalse resultRegister $ if hasElse then elseLabel else endLabel
+
         mapM_ (compileStmt symbolTable) trueStmts
+
         -- only generate an else label + code if we actually have an else body
         when hasElse $ do
+          -- skip the else block if we were in the main block
           writeInstr (Oz.InstrBranchUnconditional endLabel)
           writeLabel elseLabel
           mapM_ (compileStmt symbolTable) falseStmts
+
         writeLabel endLabel
 compileCompStmt symbolTable sp (Roo.WhileBlock testExpr stmts) =
   let whileIdent = "while_ln" ++ show (sourceLine sp) ++ "col" ++ show (sourceColumn sp)
@@ -185,27 +255,38 @@ compileCompStmt symbolTable sp (Roo.WhileBlock testExpr stmts) =
         -- this lets us avoid an unconditional branch every loop
         writeInstr $ Oz.InstrBranchUnconditional testLabel
         writeLabel startLabel
+
         mapM_ (compileStmt symbolTable) stmts
+
         writeLabel testLabel
+
+        -- since errors are generated in order of compilation (haha stateful haskell is fun), this
+        -- should probably go before the statements in the body, but since we're evaluating the
+        -- expression here too, it's better to keep those error messages together
+        -- we could forcibly evaluate the expression earlier, but ¯\_(ツ)_/¯
         unless (exprT =%= boolT) $ addError $ InvalidConditionType exprPos exprT boolT
         resultRegister <- evalExpr
         writeInstr $ Oz.InstrBranchOnTrue resultRegister startLabel
 
+-- | Attempt to compile an atomic statement. We don't use the source position to generate labels
+-- here; instead, it's used for error messages.
 compileAtomicStmt :: SymbolTable -> SourcePos -> Roo.AtomicStmt -> MaybeOzState ()
-compileAtomicStmt symbolTable _ (Roo.Write expr) =
-  compileWrite symbolTable expr
+compileAtomicStmt symbolTable _ (Roo.Write expr) = compileWrite symbolTable expr
 compileAtomicStmt symbolTable _ (Roo.WriteLn expr) = do
   compileWrite symbolTable expr
   lift $ writeStringConst "\\n"
-compileAtomicStmt symbolTable pos (Roo.Read lValue) =
-  let lValType = getLvalType symbolTable lValue
+compileAtomicStmt symbolTable _ (Roo.Read lval@(Roo.LValue pos _ _ _)) =
+  let lValType = getLvalType symbolTable lval
    in do
         readBuiltin <- case lValType of
           (BuiltinT Roo.TBool _) -> return Oz.BuiltinReadBool
           (BuiltinT Roo.TInt _) -> return Oz.BuiltinReadInt
+          -- record an error and exit early if the type is invalid (e.g., alias types)
           t -> addError (InvalidReadType pos t [boolT, intT]) >> failCompile
+
         writeInstr $ Oz.InstrCallBuiltin readBuiltin
-        dest <- compileLvalLoad Roo.PassByRef symbolTable lValue
+        -- load the address of the destination
+        dest <- compileLvalLoad PassByRef symbolTable lval
         writeInstr $ Oz.InstrStoreIndirect dest reservedRegister
 compileAtomicStmt table pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr) =
   let exprT = getExprType table expr
@@ -221,7 +302,9 @@ compileAtomicStmt table pos (Roo.Assign lval@(Roo.LValue _ varId _ _) expr) =
         unless (exprT =%= lvalT) $ addError assignError
         if isAliasT lvalT
           then do
-            when (exprT /= UnknownT && lvalT /= exprT) $ addError assignError
+            -- the unless above succeeds if the modes are different due to using loose equality
+            -- if the modes are different, generate an error here
+            when (isAliasT exprT && lvalT /= exprT) $ addError assignError
             case expr of
               Roo.LVal _ sourceLval -> compileAliasTypeAssign table lval sourceLval
               -- invalid, but compile it anyway to check the lvalue/expression semantics
@@ -232,24 +315,29 @@ compileAtomicStmt table _ (Roo.Call procId paramExprs) =
    in case lookupProcedure table (getName procId) of
         Nothing -> addError (UnknownProcedure procId) >> failCompile
         Just (ProcSymbol declId paramSymbols) -> do
+          -- this is a bit cumbersome...
           lift $ prepareArgs table callsite declId 0 paramSymbols paramExprs
           writeInstr $ Oz.InstrCall (procLabel procId)
 
+-- | Prepare the arguments for a procedure call. This involves checking the number of arguments
+-- provided against the number of parameters declared, evaluating every provided argument,
+-- type checking it against the parameter declaration, and copying its value into the appropriate
+-- register. We do this by traversing the lists of arguments and parameters alongside each other
+-- recursively.
 prepareArgs ::
   SymbolTable ->
   -- The callsite (the source position at which the procedure call appears), for error messages
   SourcePos ->
   -- The Ident from the procedure declaration, for error messages
   Roo.Ident ->
-  -- The cumulative count of handled args, for argument count mismatch errors
+  -- The cumulative count of handled args, for argument count mismatch errors and registers
   Int ->
   -- The list of parameter symbols
   [NamedSymbol] ->
   -- The list of expressions supplied at the callsite
   [Roo.Expr] ->
-  -- A list of registers in which each argument is stored
   OzState ()
-prepareArgs _ _ _ _ [] [] = return () -- base case for matching arg count
+prepareArgs _ _ _ _ [] [] = return () -- base case for matching argument + parameter counts
 prepareArgs _ callsite declId count [] exprList =
   -- more args than params
   addError (ArgumentCountMismatch callsite declId (count + length exprList) count)
@@ -263,53 +351,72 @@ prepareArgs table callsite declId count (param : paramList) (expr : exprList) =
    in do
         unless (paramT =%= exprT) $ addError typeErr
         reg <- runMaybeT $ case getPassMode param of
-          Roo.PassByRef -> case expr of
+          PassByRef -> case expr of
             -- only lvalue expressions can ever be in reference mode, since other expressions don't
             -- have an address
-            Roo.LVal _ lval -> compileLvalLoad Roo.PassByRef table lval
+            Roo.LVal _ lval -> compileLvalLoad PassByRef table lval
+            -- we don't type check the expression itself here, since it's mostly irrelevant (a
+            -- non-lvalue expression will never be valid here even if its types are correct...)
             _ -> addError typeErr >> failCompile
-          Roo.PassByVal -> compileExpr table expr
+          PassByVal -> compileExpr table expr
         whenJust reg $ writeInstr . Oz.InstrMove (Oz.Register count)
+        -- move onto the next parameter
         prepareArgs table callsite declId (count + 1) paramList exprList
 
-getPassMode :: NamedSymbol -> Roo.ProcParamPassMode
+-- | Get the mode of a symbol. Only alias types and integer/boolean can have modes, but we pretend
+-- everything else is a value type anyway.
+getPassMode :: NamedSymbol -> ProcParamPassMode
 getPassMode (NamedSymbol _ symT) = case symT of
   AliasT _ mode -> mode
   BuiltinT _ mode -> mode
   -- don't print an error here - we should have caught it when building the symbol table
   -- just pretend like we have a real mode, I don't think it matters (for now)
-  _ -> Roo.PassByVal
+  _ -> PassByVal
 
+-- | Compile an assignment from the result of an expression into an lvalue. This will never be done
+-- if the expression is an alias type, so it's just a direct copy from the expression's result to
+-- the lvalue's address.
 compileExprAssign :: SymbolTable -> Roo.LValue -> Roo.Expr -> MaybeOzState ()
 compileExprAssign table lval expr = do
   -- compile both sides without bailing on failure (yet) to record errors
-  let maybeDest = runMaybeT $ compileLvalLoad Roo.PassByRef table lval
+  let maybeDest = runMaybeT $ compileLvalLoad PassByRef table lval
   let maybeSource = runMaybeT $ compileExpr table expr
+  -- fail out here if something went wrong
   source <- liftToMaybeT maybeSource
   dest <- liftToMaybeT maybeDest
   writeInstr $ Oz.InstrStoreIndirect dest source
 
+-- | Compile an assignment for an alias type. This is more complex than the expression case, since
+-- we can't just assign the address of the source lvalue into the dest lvalue --- if the stack slot
+-- containing the source gets popped before the dest, the dest would now be pointing to invalid
+-- memory. Instead, we have to copy the value of every stack slot that belongs to the lvalue.
 compileAliasTypeAssign :: SymbolTable -> Roo.LValue -> Roo.LValue -> MaybeOzState ()
 compileAliasTypeAssign table destLval sourceLval =
   let -- extract the underlying alias type which the lvalue is a reference to so we can get its size
       extractBaseAliasType lval = case getLvalType table lval of
-        t@(AliasT _ _) -> Just $ setMode Roo.PassByVal t
+        t@(AliasT _ _) -> Just $ setMode PassByVal t
         _ -> Nothing
       sourceSize = extractBaseAliasType sourceLval >>= typeSize table
       destSize = extractBaseAliasType destLval >>= typeSize table
    in do
-        let maybeDest = runMaybeT $ compileLvalLoad Roo.PassByRef table destLval
-        let maybeSource = runMaybeT $ compileLvalLoad Roo.PassByRef table sourceLval
+        -- compile both sides without bailing on failure (yet) to record errors
+        let maybeDest = runMaybeT $ compileLvalLoad PassByRef table destLval
+        let maybeSource = runMaybeT $ compileLvalLoad PassByRef table sourceLval
+        -- fail out here if something went wrong
         dest <- liftToMaybeT maybeDest
         source <- liftToMaybeT maybeSource
-        -- remap the types to the underlying types
+
         sourceSize' <- liftMaybe sourceSize
         destSize' <- liftMaybe destSize
         if sourceSize' /= destSize'
           then failCompile
           else do
+            -- we store the increment between slots (always 1) here
             incrReg <- getNextRegister
+            -- and we use a temporary register to load the value into and out of, since we can't
+            -- just move from one stack slot to another
             copyReg <- getNextRegister
+
             -- explicitly write the first load and the write the rest via a loop
             -- this lets us avoid two extra sub_offsets
             writeInstrs
@@ -317,8 +424,10 @@ compileAliasTypeAssign table destLval sourceLval =
                 Oz.InstrLoadIndirect copyReg source,
                 Oz.InstrStoreIndirect dest copyReg
               ]
-            mapM_
-              ( \_ ->
+            -- for loops? in _my_ haskell? what is this, python?
+            forM_
+              [1 .. sourceSize' - 1]
+              ( \_ -> -- we don't actually care about the number, it's just a loop counter
                   writeInstrs
                     [ Oz.InstrSubOffset source source incrReg,
                       Oz.InstrSubOffset dest dest incrReg,
@@ -326,8 +435,9 @@ compileAliasTypeAssign table destLval sourceLval =
                       Oz.InstrStoreIndirect dest copyReg
                     ]
               )
-              [1 .. sourceSize' - 1]
 
+-- | Compile a write to stdout. This is used for both write and writeln, since the only difference
+-- is the trailing newline.
 compileWrite :: SymbolTable -> Roo.Expr -> MaybeOzState ()
 compileWrite _ (Roo.ConstBool _ bool) = lift $ writeBoolConst bool
 compileWrite _ (Roo.ConstInt _ int) = lift $ writeIntegerConst int
@@ -339,12 +449,14 @@ compileWrite table expr =
         exprReg <- compileExpr table expr
         writeInstr $ Oz.InstrMove reservedRegister exprReg
         case exprT of
-          UnknownT -> failCompile
+          UnknownT -> failCompile -- explicit case here to avoid =%= matching it
           StringT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintString)
           _ | exprT =%= intT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintInt)
           _ | exprT =%= boolT -> writeInstr (Oz.InstrCallBuiltin Oz.BuiltinPrintBool)
           _ -> failCompile
 
+-- | Performs constant propagation and compiles an expression, returning the register its
+-- final value is stored in. The heavy lifting happens in 'compileExpr''.
 compileExpr :: SymbolTable -> Roo.Expr -> MaybeOzState Oz.Register
 compileExpr table expr = let expr' = propagateConsts expr in compileExpr' table expr'
 
@@ -362,6 +474,7 @@ compileExpr' _ (Roo.ConstStr _ val) = do
   writeInstr $ Oz.InstrStringConst reg (Oz.StringConst val)
   return reg
 compileExpr' table (Roo.UnOpExpr _ op expr) = do
+  -- check that the type matches the input type of the operator, and record an error otherwise
   lift $ expectUnOpType op (operatorPos expr) $ getExprType table expr
 
   source <- compileExpr' table expr
@@ -369,6 +482,8 @@ compileExpr' table (Roo.UnOpExpr _ op expr) = do
   writeInstr $ unOpInstruction op dest source
   return dest
 compileExpr' table (Roo.BinOpExpr pos op left right) = do
+  -- check all the types for a) matching the types expected by the operator, and b) matching each
+  -- other (since the operators can't handle mixed types)
   let leftT = getExprType table left
   lift $ expectBinOpType op (operatorPos left) leftT
   let rightT = getExprType table right
@@ -381,13 +496,19 @@ compileExpr' table (Roo.BinOpExpr pos op left right) = do
   -- for the left hand side
   let leftReg = runMaybeT $ compileExpr' table left
   let rightReg = runMaybeT $ compileExpr' table right
+  -- actually fail out here if necessary
   leftReg' <- liftToMaybeT leftReg
   rightReg' <- liftToMaybeT rightReg
   dest <- getNextRegister
   writeInstr $ binOpInstruction op dest leftReg' rightReg'
   return dest
-compileExpr' table (Roo.LVal _ lval) = compileLvalLoad Roo.PassByVal table lval
+-- compiling an lvalue expression is treated as compiling it to a single value, since we have to
+-- return a single register
+compileExpr' table (Roo.LVal _ lval) = compileLvalLoad PassByVal table lval
 
+-- | Propagate constants as far as we can at compile time to save a bit of work at runtime. The
+-- only expressions which can be reduced further are operator expressions, which get handed off
+-- to the relevant functions for evaluation.
 propagateConsts :: Roo.Expr -> Roo.Expr
 propagateConsts expr@(Roo.UnOpExpr pos op _) = case unOpReturnType op of
   t
@@ -401,64 +522,93 @@ propagateConsts expr@(Roo.BinOpExpr pos op _ _) = case binOpReturnType op of
     | otherwise -> expr
 propagateConsts expr = expr
 
+-- | Evaluate an integer expression as far as possible. The real work happens in 'evalIntExpr''.
 evalIntExpr :: SourcePos -> Roo.Expr -> Roo.Expr
 evalIntExpr pos expr = case evalIntExpr' expr of
   Left e -> e
   Right i -> Roo.ConstInt pos i
 
+-- | Recursively evaluate an integer expression to propagate constants. If an expression can be
+-- evaluated at compile-time, this returns a Right containing its value; otherwise, it returns the
+-- original expression.
 evalIntExpr' :: Roo.Expr -> Either Roo.Expr Integer
-evalIntExpr' (Roo.ConstInt _ i) = Right i
+evalIntExpr' (Roo.ConstInt _ i) = Right i -- we've found a constant --- begin the propagation
 evalIntExpr' expr@(Roo.UnOpExpr _ Roo.OpNeg expr') =
+  -- negate a constant or just give up
   mapBoth (const expr) negate $ evalIntExpr' expr'
 evalIntExpr' expr@(Roo.BinOpExpr _ op left right) =
   let left' = evalIntExpr' left
       right' = evalIntExpr' right
    in case (left', right') of
+        -- we can only propagate a binop expression if both sides are numbers
         (Right i, Right j) -> case op of
           Roo.OpMul -> Right $ i * j
           Roo.OpMinus -> Right $ i - j
           Roo.OpPlus -> Right $ i + j
+          -- division by zero is supposed to be a runtime error but Haskell handles it fine, so we
+          -- have to special case it
           Roo.OpDiv -> if j /= 0 then Right (i `div` j) else Left expr
         _ -> Left expr
+-- nothing else can be done, so give up
 evalIntExpr' expr = Left expr
 
+-- | Evaluate a boolean expression as far as possible. The real work happens in 'evalBoolExpr''.
 evalBoolExpr :: SourcePos -> Roo.Expr -> Roo.Expr
 evalBoolExpr pos expr = case evalBoolExpr' expr of
   Left e -> e
   Right b -> Roo.ConstBool pos b
 
+-- | Recursively evaluate a boolean expression to propagate constants. If an expression can be
+-- evaluated at compile-time, this returns a Right containing its value; otherwise, it returns the
+-- original expression.
+-- This is a little more complex than integer expressions, since an arithmetic operator can't have
+-- boolean expressions as operands (they all return boolean, and there's no way to go back using
+-- Roo operators) but a boolean operator can have integer expressions as operands.
 evalBoolExpr' :: Roo.Expr -> Either Roo.Expr Bool
 evalBoolExpr' (Roo.ConstBool _ b) = Right b
+-- negate a constant or give up
 evalBoolExpr' expr@(Roo.UnOpExpr _ Roo.OpNot expr') = mapBoth (const expr) not $ evalBoolExpr' expr'
 evalBoolExpr' expr@(Roo.BinOpExpr pos op left right) =
-  let left' = propagateConsts left
+  let -- we can have integer expressions _or_ boolean expressions, so we have to start from the
+      -- top instead of just recursing directly (is recursing a word?)
+      left' = propagateConsts left
       right' = propagateConsts right
    in -- if/else is ugly in haskell, so I'll just let GHC optimise this one...
       case () of
+        -- and/or
         () | isBooleanOp op -> case (left', right') of
           (Roo.ConstBool _ b, Roo.ConstBool _ b') -> case op of
             Roo.OpAnd -> Right $ b && b'
             Roo.OpOr -> Right $ b || b'
+            -- this never happens since isBooleanOp is only true for and/or
             _ -> Left expr
+          -- if we don't have two bools we can't do anything more
           _ -> Left $ Roo.BinOpExpr pos op left' right'
+        -- equality/ordering
         () | isRelOp op -> case (left', right') of
+          -- this can apply to both basic types, but only when both operands are the same type
           (Roo.ConstBool _ b, Roo.ConstBool _ b') -> Right $ evalRelOp op b b'
           (Roo.ConstInt _ i, Roo.ConstInt _ i') -> Right $ evalRelOp op i i'
+          -- reconstruct an expression with the possibly propagated operand expressions
           _ -> Left $ Roo.BinOpExpr pos op left' right'
-        () | otherwise -> Left expr
-evalBoolExpr' expr = Left expr
+        () | otherwise -> Left expr -- nothing to be done here
+evalBoolExpr' expr = Left expr -- we're done
 
+-- | Evaluate a Roo relational operator as the Haskell equivalent
 evalRelOp :: (Ord a) => Roo.BinaryOp -> a -> a -> Bool
-evalRelOp Roo.OpEq l r = l == r
-evalRelOp Roo.OpNeq l r = l /= r
-evalRelOp Roo.OpGreater l r = l > r
-evalRelOp Roo.OpGreaterEq l r = l >= r
-evalRelOp Roo.OpLess l r = l < r
-evalRelOp Roo.OpLessEq l r = l <= r
+evalRelOp Roo.OpEq = (==)
+evalRelOp Roo.OpNeq = (/=)
+evalRelOp Roo.OpGreater = (>)
+evalRelOp Roo.OpGreaterEq = (>=)
+evalRelOp Roo.OpLess = (<)
+evalRelOp Roo.OpLessEq = (<=)
 
+-- | Compile an lvalue into the specified mode, returning a register containing the result.
+-- When called with PassByRef, the register will contain the address of the lvalue; when called with
+-- PassByVal, it will contain the lvalue's value.
 compileLvalLoad :: Roo.ProcParamPassMode -> SymbolTable -> Roo.LValue -> MaybeOzState Oz.Register
 -- load the value of a plain variable
-compileLvalLoad Roo.PassByVal table (Roo.LValue _ ident Nothing Nothing) = do
+compileLvalLoad PassByVal table (Roo.LValue _ ident Nothing Nothing) = do
   var <- checkedLookupVar table ident
   case symbolType var of
     -- an alias type can never be loaded in value mode
@@ -468,8 +618,8 @@ compileLvalLoad Roo.PassByVal table (Roo.LValue _ ident Nothing Nothing) = do
       let sourceSlot = ozStackSlot var
       case mode of
         -- the stack slot contains a value, so load it directly
-        Roo.PassByVal -> writeInstr $ Oz.InstrLoad dest sourceSlot
-        Roo.PassByRef -> do
+        PassByVal -> writeInstr $ Oz.InstrLoad dest sourceSlot
+        PassByRef -> do
           addrReg <- getNextRegister
           writeInstrs
             [ -- load the address the value is stored in
@@ -479,7 +629,8 @@ compileLvalLoad Roo.PassByVal table (Roo.LValue _ ident Nothing Nothing) = do
             ]
       return dest
     _ -> failCompile
-compileLvalLoad Roo.PassByRef table (Roo.LValue _ ident Nothing Nothing) = do
+-- load the address of a plain lvalue
+compileLvalLoad PassByRef table (Roo.LValue _ ident Nothing Nothing) = do
   var <- checkedLookupVar table ident
   mode <- liftMaybe $ case symbolType var of
     AliasT _ mode -> Just mode
@@ -489,46 +640,69 @@ compileLvalLoad Roo.PassByRef table (Roo.LValue _ ident Nothing Nothing) = do
   let sourceSlot = ozStackSlot var
   case mode of
     -- the stack slot contains a value, so load the address of the stack slot
-    Roo.PassByVal -> writeInstr $ Oz.InstrLoadAddress dest sourceSlot
+    PassByVal -> writeInstr $ Oz.InstrLoadAddress dest sourceSlot
     -- the stack slot contains an address, so load that directly
-    Roo.PassByRef -> writeInstr $ Oz.InstrLoad dest sourceSlot
+    PassByRef -> writeInstr $ Oz.InstrLoad dest sourceSlot
   return dest
+-- load an lvalue with one or both of an index expression and a field
 compileLvalLoad mode table (Roo.LValue pos ident index field) = do
-  baseAddrReg <- compileLvalLoad Roo.PassByRef table (Roo.LValue pos ident Nothing Nothing)
+  -- first, we need the address of the base variable
+  baseAddrReg <- compileLvalLoad PassByRef table (Roo.LValue pos ident Nothing Nothing)
   -- this is safe because if the variable is unknown we fail the call to `compileLvalLoad`
   let varDeclaration = getIdent $ fromJust $ lookupVar table (getName ident)
+  -- compile the index expression, retrieving the underlying element type
+  -- we reuse baseAddrReg since we only need it as a starting point for offsetting from
   indexT <- compileIndexExpr table baseAddrReg varDeclaration index
   void $ compileFieldAccess table baseAddrReg varDeclaration indexT field
   case mode of
-    Roo.PassByRef -> return baseAddrReg
-    Roo.PassByVal -> do
-      dest <- getNextRegister
-      writeInstr $ Oz.InstrLoadIndirect dest baseAddrReg
-      return dest
+    PassByRef -> return baseAddrReg -- we wanted the address and we have it, so we're done
+    -- we want the value, but we have the address
+    PassByVal -> do
+      -- reuse the register
+      writeInstr $ Oz.InstrLoadIndirect baseAddrReg baseAddrReg
+      return baseAddrReg
 
-compileIndexExpr :: SymbolTable -> Oz.Register -> Roo.Ident -> Maybe Roo.Expr -> MaybeOzState SymbolType
+-- | Compile an index expression, using it to calculate an offset from a base address. Return the
+-- type of the element accessed. If there isn't an index expression, return the type of the base
+-- variable for use in field access.
+compileIndexExpr ::
+  SymbolTable ->
+  Oz.Register ->
+  Roo.Ident ->
+  Maybe Roo.Expr ->
+  MaybeOzState SymbolType
 compileIndexExpr table _ varIdent Nothing =
   liftMaybe $ symbolType <$> lookupVar table (getName varIdent)
 compileIndexExpr table dest varIdent (Just expr) =
   let pos = Roo.exprStart expr
       baseT = symbolType <$> lookupVar table (getName varIdent)
    in do
+        -- this is the ugliest haskell I've ever written
+        -- retrieve the underlying element type and some details of the array type, if the
+        -- base variable is an array type
+        -- if it's not, fail
         (ident, size, elemT) <-
           ( case baseT of
               Just baseT'@(AliasT name _) -> case lookupType table name of
                 Just (ArrayT ident size elemT') -> return (ident, toInteger size, elemT')
+                -- record an error message including the position the real type was declared at
                 Just (RecordT (Roo.Ident pos' _) _) ->
                   addError (UnexpectedIndex pos varIdent baseT' (Just pos')) >> failCompile
                 _ -> failCompile
+              -- record an error message without a type declaration position
               Just baseT' -> addError (UnexpectedIndex pos varIdent baseT' Nothing) >> failCompile
               Nothing -> failCompile
             )
+        -- propagate constants so we can do some compile-time bounds checking
         let expr' = propagateConsts expr
         lift $ expectType intT (InvalidIndexType pos) $ getExprType table expr'
+        -- if we've reached this point the type should have a defined size, so just get it
         let elemSize = toInteger $ fromMaybe 1 $ typeSize table elemT
         case expr' of
+          -- we have a constant index, so we can do compile time bounds checkin
           Roo.ConstInt _ i -> do
             when (i >= size || i < 0) $ addError $ IndexOutOfBounds pos i size varIdent ident
+            -- we don't need to calculate anything at runtime if the offset is known to be 0
             when (i /= 0) $ do
               offsetReg <- getNextRegister
               writeInstrs
@@ -537,16 +711,59 @@ compileIndexExpr table dest varIdent (Just expr) =
                 ]
             return elemT
           _ -> do
+            -- the index is calculated at runtime, so we have to actually calculate it
             offsetReg <- compileExpr table expr'
+            -- do a bounds check before we actually load anything
+            -- this will jump to the OOB handler if it fails, so we'll never load OOB elements
             lift $ writeBoundsCheck pos offsetReg size
             sizeReg <- getNextRegister
             writeInstrs
+              -- offset by the element size, not 1 (oops)
               [ Oz.InstrIntConst sizeReg $ Oz.IntegerConst elemSize,
                 Oz.InstrMulInt offsetReg offsetReg sizeReg,
                 Oz.InstrSubOffset dest dest offsetReg
               ]
             return elemT
 
+-- | Calculate the offset for a field access. If there's no field access for the lval, this is a
+-- no-op.
+compileFieldAccess ::
+  SymbolTable ->
+  Oz.Register ->
+  Roo.Ident ->
+  SymbolType ->
+  Maybe Roo.Ident ->
+  MaybeOzState ()
+compileFieldAccess _ _ _ _ Nothing = return ()
+compileFieldAccess table dest varIdent baseT (Just fieldIdent@(Roo.Ident pos _)) = case baseT of
+  AliasT name _ -> case lookupType table name of
+    -- we do have a record type, so try to find the field
+    Just (RecordT typeIdent fields) -> case Map.lookup (getName fieldIdent) fields of
+      Just (FieldSymbol _ idx) ->
+        -- don't bother to calculate an offset at runtime if it's the first field
+        when (idx /= 0) $ do
+          reg <- getNextRegister
+          writeInstrs
+            [ Oz.InstrIntConst reg $ Oz.IntegerConst $ toInteger idx,
+              Oz.InstrSubOffset dest dest reg
+            ]
+      Nothing -> addError (UnknownField fieldIdent varIdent baseT typeIdent) >> failCompile
+    -- not a record type, so record an error message showing the original declaration
+    Just (ArrayT (Roo.Ident pos' _) _ _) ->
+      addError (UnexpectedField pos varIdent baseT (Just pos')) >> failCompile
+    _ -> failCompile
+  -- not an alias type, so we can't access a field
+  _ -> addError (UnexpectedField pos varIdent baseT Nothing) >> failCompile
+
+-- | Look up a variable in the symbol table, returning the symbol if it exists or recording an
+-- error and failing otherwise.
+checkedLookupVar :: SymbolTable -> Roo.Ident -> MaybeOzState LocalSymbol
+checkedLookupVar table ident = case lookupVar table (getName ident) of
+  Just v -> return v
+  Nothing -> addError (UnknownVar ident) >> failCompile
+
+-- | Write a bounds check for an array access. The source position points to the index expression
+-- for the error message.
 writeBoundsCheck :: SourcePos -> Oz.Register -> Integer -> OzState ()
 writeBoundsCheck sp idxReg size =
   let okLabel = Oz.Label $ "inbounds_ln" ++ show (sourceLine sp) ++ "_col" ++ show (sourceColumn sp)
@@ -570,28 +787,9 @@ writeBoundsCheck sp idxReg size =
           ]
         writeLabel okLabel
 
-compileFieldAccess :: SymbolTable -> Oz.Register -> Roo.Ident -> SymbolType -> Maybe Roo.Ident -> MaybeOzState ()
-compileFieldAccess _ _ _ _ Nothing = return ()
-compileFieldAccess table dest varIdent baseT (Just fieldIdent@(Roo.Ident pos _)) = case baseT of
-  AliasT name _ -> case lookupType table name of
-    Just (RecordT typeIdent fields) -> case Map.lookup (getName fieldIdent) fields of
-      Just (FieldSymbol _ idx) ->
-        when (idx /= 0) $ do
-          reg <- getNextRegister
-          writeInstrs
-            [ Oz.InstrIntConst reg $ Oz.IntegerConst $ toInteger idx,
-              Oz.InstrSubOffset dest dest reg
-            ]
-      Nothing -> addError (UnknownField fieldIdent varIdent baseT typeIdent) >> failCompile
-    Just (ArrayT (Roo.Ident pos' _) _ _) ->
-      addError (UnexpectedField pos varIdent baseT (Just pos')) >> failCompile
-    _ -> failCompile
-  _ -> addError (UnexpectedField pos varIdent baseT Nothing) >> failCompile
-
-checkedLookupVar :: SymbolTable -> Roo.Ident -> MaybeOzState LocalSymbol
-checkedLookupVar table ident = case lookupVar table (getName ident) of
-  Just v -> return v
-  Nothing -> addError (UnknownVar ident) >> failCompile
+--
+-- Convenience functions for generating code to write various types to stdout.
+--
 
 writeBoolConst :: Bool -> OzState ()
 writeBoolConst val =
@@ -614,16 +812,18 @@ writeStringConst val =
       Oz.InstrCallBuiltin Oz.BuiltinPrintString
     ]
 
+-- | Generate a label for a procedure.
 procLabel :: Roo.Ident -> Oz.Label
 procLabel (Roo.Ident _ name) = Oz.Label ("proc_" ++ name)
 
-(|+|) :: Oz.Register -> Int -> Oz.Register
-(Oz.Register r) |+| n = Oz.Register $ r + n
-
+-- | Generate an instruction for a unary operator, taking the operator, destination register, and
+-- source register.
 unOpInstruction :: Roo.UnaryOp -> Oz.Register -> Oz.Register -> Oz.Instruction
 unOpInstruction Roo.OpNot = Oz.InstrNot
 unOpInstruction Roo.OpNeg = Oz.InstrNegInt
 
+-- | Generate an instruction for a binary operator, taking the operator, destination register,
+-- LHS source, and RHS source.
 binOpInstruction :: Roo.BinaryOp -> Oz.Register -> Oz.Register -> Oz.Register -> Oz.Instruction
 binOpInstruction Roo.OpPlus = Oz.InstrAddInt
 binOpInstruction Roo.OpMinus = Oz.InstrSubInt
@@ -638,6 +838,12 @@ binOpInstruction Roo.OpGreaterEq = Oz.InstrCmpGreaterEqualInt
 binOpInstruction Roo.OpLess = Oz.InstrCmpLessThanInt
 binOpInstruction Roo.OpLessEq = Oz.InstrCmpLessEqualInt
 
+-- | Infix addition for registers, just for convenience when updating the register state.
+(|+|) :: Oz.Register -> Int -> Oz.Register
+(Oz.Register r) |+| n = Oz.Register $ r + n
+
+-- | Get the next free register and update the register state to indicate that it is now in use.
+-- This doesn't allow us to re-use registers in the case that they're no longer in use, but oh well.
 getNextRegister :: MonadState OzStateVal m => m Oz.Register
 getNextRegister = do
   reg <- gets register
@@ -655,23 +861,34 @@ reservedRegister = Oz.Register 0
 initialRegister :: Oz.Register
 initialRegister = reservedRegister |+| 1
 
+-- | Reset the register state to all registers unused.
 resetRegister :: MonadState OzStateVal m => m ()
 resetRegister = modify (\st -> st {register = initialRegister})
 
+-- | Fail a MaybeT. There are a bunch of other ways to do this like 'liftMaybe Nothing', but this
+-- works too. This function is just here to improve clarity of what it's doing; GHC should optimise
+-- it away.
 failCompile :: Monad m => MaybeT m a
-failCompile = liftMaybe Nothing
+failCompile = mzero
 
+-- | Get the stack slot occupied by a variable or parameter. For aggregate types, this is the base
+-- slot.
 ozStackSlot :: LocalSymbol -> Oz.StackSlot
 ozStackSlot (LocalSymbol _ _ slot) = Oz.StackSlot slot
 
+-- | Write a single Oz instruction.
 writeInstr :: MonadState OzStateVal m => Oz.Instruction -> m ()
 writeInstr instr = writeInstrs [instr]
 
+-- | Write a list of Oz instructions into the Oz code.
 writeInstrs :: MonadState OzStateVal m => [Oz.Instruction] -> m ()
 writeInstrs instrs = modify (\st -> st {code = code st ++ map Oz.InstructionLine instrs})
 
+-- | Write a label into the Oz code.
 writeLabel :: MonadState OzStateVal m => Oz.Label -> m ()
 writeLabel label = modify (\st -> st {code = code st ++ [Oz.LabelLine label]})
 
+-- | Force the execution of the provided fallible compilation action, returning a default value if
+-- it fails.
 forceCompile :: Monad m => a -> MaybeT m a -> m a
 forceCompile defaultVal action = fromMaybe defaultVal <$> runMaybeT action
