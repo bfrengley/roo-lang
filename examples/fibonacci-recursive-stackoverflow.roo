@@ -1,0 +1,41 @@
+procedure main ()
+    integer result;
+    integer n;
+    integer accumulator;
+{
+    n <- 0;
+    while true do
+        write "calling for n = ";
+        write n;
+        write ":";
+        accumulator <- 0;
+        call fibonacci(n, accumulator, result);
+        write " result ";
+        write result;
+        write " (";
+        write accumulator;
+        writeln ") recursions";
+        n <- n + 1;
+    od
+}
+
+procedure fibonacci (integer val n, integer accumulator, integer result)
+    integer prev1;
+    integer prev2;
+{
+    # write "--> fibonacci called with n=";
+    # writeln n;
+    # bump the accumulator - this will allow tracking how many recursions are invoked
+    accumulator <- accumulator + 1;
+    if n = 1 then
+        result <- 1;
+    else
+        if n = 0 then
+            result <- 0;
+        else
+            call fibonacci(n-1, accumulator, prev1);
+            call fibonacci(n-2, accumulator, prev2);
+            result <- prev1 + prev2;
+        fi
+    fi
+}
