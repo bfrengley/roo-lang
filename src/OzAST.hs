@@ -7,6 +7,9 @@
 -- An Oz program consists of a sequence of instructions, followed by an
 -- optional list of labelled blocks of other instructions representing named
 -- chunks of code that any other code can 'jump' to.
+--
+-- This compiler converts a Roo AST into an Oz AST before serializing it; this module defines the
+-- AST types for Oz (and how some of the basic types are printed).
 module OzAST where
 
 class OzShow a where

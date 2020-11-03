@@ -64,6 +64,8 @@ checkArgs progname _ =
     putStrLn "        parsing the output and printing it again"
     exitWith (ExitFailure 1)
 
+-- 'runWithOpts' executes the appropriate operation on the Roo program based on the provided
+-- arguments.
 runWithOpts :: String -> Program -> Maybe Opt -> IO ()
 runWithOpts _ ast (Just OPrint) = I.putStr (prettyPrint ast)
 runWithOpts _ ast (Just OAST) = print ast

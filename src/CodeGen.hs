@@ -1,5 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 
+-- |
+-- Module: CodeGen
+-- Description: This module provides functions which generate Oz code from a Roo AST.
+-- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
+--             Ben Frengley <bfrengley@student.unimelb.edu.au>
 module CodeGen where
 
 import qualified AST as Roo
