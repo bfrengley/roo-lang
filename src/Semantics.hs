@@ -1,6 +1,14 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+-- |
+-- Module: Semantics
+-- Description: This module defines common types for recording semantic errors in Roo programs.
+-- Maintainer: Stewart Webb <sjwebb@student.unimelb.edu.au>
+--             Ben Frengley <bfrengley@student.unimelb.edu.au>
+--
+-- The types and functions defined in this module are the common types used for checking the
+-- semantics of a Roo program and for displaying errors.
 module Semantics where
 
 import AST
@@ -12,13 +20,20 @@ import PrettyPrint (pPrintBuiltinType, printBinOp, showT)
 import Text.Parsec (SourcePos, sourceColumn, sourceLine, sourceName)
 import Util (Equivalent (..))
 
+-- | The type of a symbol. This is defined here rather than with the symbol table to avoid a
+-- circular reference (the errors don't belong to the symbol table so they're defined here, and
+-- many of them refer to symbol types so the types can't be defined in the symbol table).
 data SymbolType
   = AliasT Text ProcParamPassMode
   | BuiltinT BuiltinType ProcParamPassMode
   | StringT
-  | UnknownT
+  | -- | UnknownT is the bottom type, which is the type of invalid/unknown variables and is loosely
+    -- equal to all other types to allow for nicer error messages.
+    UnknownT
   deriving (Show, Eq)
 
+-- Loose equality/equivalence for symbol types, which ignores modes and allows the bottom type to
+-- match anything. For more info see 'Equivalent'.
 instance Equivalent SymbolType where
   (AliasT name _) =%= (AliasT name' _) = name == name'
   (BuiltinT t _) =%= (BuiltinT t' _) = t == t'
@@ -26,6 +41,17 @@ instance Equivalent SymbolType where
   _ =%= UnknownT = True
   t1 =%= t2 = t1 == t2
 
+-- | SemanticState is a state wrapper which supports recording errors using 'addError'. This keeps
+-- the errors out of the state and return types and allows the use of different types of states
+-- with the same error reporting mechanism, but it does make the monad handling a little trickier.
+type SemanticState s = WriterT [SemanticError] (State s)
+
+-- | Record an error inside a monad which allows writing.
+addError :: MonadWriter [SemanticError] m => SemanticError -> m ()
+addError err = tell [err]
+
+-- Semantic errors. Uhh
+-- Find the 'writeError'' entry for more detail on each error
 data SemanticError
   = Redefinition Ident Ident
   | UnknownType Ident
@@ -51,14 +77,12 @@ data SemanticError
   | MainArity SourcePos Int
   deriving (Show)
 
-type SemanticState s = WriterT [SemanticError] (State s)
-
-addError :: MonadWriter [SemanticError] m => SemanticError -> m ()
-addError err = tell [err]
-
+-- | Write an error as a nice human readable, with context from the source code.
 writeError :: [String] -> SemanticError -> Text
 writeError source = T.unlines . writeError' source
 
+-- | This writes error messages nicely, but it sure isn't written nicely. Good thing it's actually
+-- pretty simple, there are just lots of errors.
 writeError' :: [String] -> SemanticError -> [Text]
 writeError' source (Redefinition (Ident pos name) (Ident pos' _)) =
   [ errorStart pos <> ticks (T.pack name) <> " redefined",
@@ -103,7 +127,7 @@ writeError' source (InvalidBinaryType pos op found expected) =
       <> " for operator "
       <> ticks (printBinOp op)
       <> " (expected "
-      <> writeExpectedTypes NoPrintMode expected
+      <> writeExpectedTypes expected
       <> ")",
     writeContext source pos
   ]
@@ -119,7 +143,7 @@ writeError' source (BinaryTypeMismatch pos op left right) =
 writeError' source (InvalidReadType pos actual expected) =
   [ errorStart pos <> "cannot read value of type " <> ticks (printLocalType NoPrintMode actual)
       <> " (expected "
-      <> writeExpectedTypes NoPrintMode expected
+      <> writeExpectedTypes expected
       <> ")",
     writeContext source pos
   ]
@@ -236,23 +260,29 @@ writeError' source (MainArity pos arity) =
     writeContext source pos
   ]
 
+-- | Write the line of source code the position belongs to with a pointer to the specific column.
+-- The position was derived from parsing the same source used here, so the '!!' is safe.
 writeContext :: [String] -> SourcePos -> Text
 writeContext source pos =
   T.pack (source !! (sourceLine pos - 1)) <> "\n"
     <> T.replicate (sourceColumn pos - 1) " "
     <> "^"
 
-writeExpectedTypes :: PrintTypeOpt -> [SymbolType] -> Text
-writeExpectedTypes opt [t] = ticks (printLocalType opt t)
-writeExpectedTypes opt expected =
-  let types = map (ticks . printLocalType opt) expected
+-- | Write a list of expected types for errors which support multiple (like binary operand type
+-- errors).
+writeExpectedTypes :: [SymbolType] -> Text
+writeExpectedTypes [t] = ticks (printLocalType NoPrintMode t)
+writeExpectedTypes expected =
+  let types = map (ticks . printLocalType NoPrintMode) expected
    in "one of " <> T.intercalate ", " types
 
+-- | Whether to print the mode of a type or not.
 data PrintTypeOpt = PrintMode | NoPrintMode deriving (Eq)
 
+-- | Print a local type with or without its mode, as specified.
 printLocalType :: PrintTypeOpt -> SymbolType -> Text
 printLocalType _ StringT = "string"
-printLocalType _ UnknownT = "unknown" -- ???
+printLocalType _ UnknownT = "unknown" -- ??? does this ever come up?
 printLocalType NoPrintMode (AliasT name _) = name
 printLocalType PrintMode (AliasT name mode) = T.unwords [name, printPassMode mode]
 printLocalType NoPrintMode (BuiltinT t _) = pPrintBuiltinType t
@@ -262,6 +292,7 @@ printPassMode :: ProcParamPassMode -> Text
 printPassMode PassByRef = "ref"
 printPassMode PassByVal = "val"
 
+-- | Write the position into a consistent, short format for starting error messages.
 writePos :: SourcePos -> Text
 writePos pos =
   let parts = [sourceName pos, show $ sourceLine pos, show $ sourceColumn pos]
