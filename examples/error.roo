@@ -1,0 +1,10 @@
+record
+    { integer x
+    ; boolean x
+    } foo;
+array[10] foo bar;
+array[10] bar baz;
+array[10] not_a_real_type baz;
+
+procedure main () { writeln "OK"; }
+procedure foo () {write "";}
